@@ -70,9 +70,17 @@ export const OverlayCanvas = ({ labels, onLabelsChange, drawMode = 'draw' }: Ove
     if (drawMode === 'draw') {
       setCurrentPoints([[x, y]]);
     } else if (drawMode === 'point') {
-      // Point mode: create label immediately on click
-      const pointSize = 3; // Small size for point marker
+      // Point mode: create multiple points around center for better tracking
+      const pointSize = 3;
       const pointCount = labels.filter(l => l.prompt_type === 'point').length + 1;
+      const spread = 1.5; // Spread radius in percentage
+      const multiPoints: [number, number][] = [
+        [x, y], // center
+        [x - spread, y], // left
+        [x + spread, y], // right
+        [x, y - spread], // top
+        [x, y + spread], // bottom
+      ];
       const newLabel: Label = {
         id: uuidv4(),
         label: `Point ${pointCount}`,
@@ -80,7 +88,7 @@ export const OverlayCanvas = ({ labels, onLabelsChange, drawMode = 'draw' }: Ove
         y: y - pointSize / 2,
         width: pointSize,
         height: pointSize,
-        points: [[x, y]],
+        points: multiPoints,
         color: "#0ea5e9",
         prompt_type: 'point'
       };
@@ -123,7 +131,7 @@ export const OverlayCanvas = ({ labels, onLabelsChange, drawMode = 'draw' }: Ove
       const bbox = getBoundingBox(simplified);
       
       if (bbox.width > 1 && bbox.height > 1) {
-        const labelCount = labels.filter(l => l.prompt_type === 'draw').length + 1;
+        const labelCount = labels.filter(l => l.prompt_type !== 'point' && l.prompt_type !== 'box').length + 1;
         const newLabel: Label = {
           id: uuidv4(),
           label: `Label ${labelCount}`,
@@ -231,8 +239,8 @@ export const OverlayCanvas = ({ labels, onLabelsChange, drawMode = 'draw' }: Ove
           );
         }
         
-        // Check if this has polygon points
-        if (label.points && label.points.length > 2) {
+        // Check if this has polygon points (but not point prompts which store multiple tracking points)
+        if (label.points && label.points.length > 2 && label.prompt_type !== 'point') {
           const path = pointsToSvgPath(label.points);
           return (
             <svg
