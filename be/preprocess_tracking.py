@@ -38,6 +38,7 @@ def preprocess_video(video_path: str, output_path: str, grid_size: int = 32, wei
         weights_path: Path to LiteTracker weights
     """
     device = get_device()
+    print(f"Using device: {device}")
     dtype = torch.float32
     
     # Load model
