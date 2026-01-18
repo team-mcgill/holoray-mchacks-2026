@@ -55,6 +55,9 @@ export function useTracking({ videoPath, initialLabels, onLabelsUpdate }: UseTra
   const [sessionId, setSessionId] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const lastSyncTimeRef = useRef<number>(-1);
+  const videoRefForSync = useRef<HTMLVideoElement | null>(null);
   
   // Keep a ref to current labels so we always have the latest
   const labelsRef = useRef<TrackedLabel[]>(initialLabels);
@@ -233,7 +236,7 @@ export function useTracking({ videoPath, initialLabels, onLabelsUpdate }: UseTra
     }
   }, []);
   
-  // Sync tracking with video time (call this on video timeupdate)
+  // Sync tracking with video time
   const syncTime = useCallback((currentTime: number) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
@@ -241,6 +244,31 @@ export function useTracking({ videoPath, initialLabels, onLabelsUpdate }: UseTra
         time: currentTime
       }));
     }
+  }, []);
+
+  // Start RAF-based sync loop for smooth tracking
+  const startSyncLoop = useCallback((video: HTMLVideoElement) => {
+    videoRefForSync.current = video;
+    lastSyncTimeRef.current = -1;
+    
+    const loop = () => {
+      const v = videoRefForSync.current;
+      if (v && !v.paused && v.currentTime !== lastSyncTimeRef.current) {
+        lastSyncTimeRef.current = v.currentTime;
+        syncTime(v.currentTime);
+      }
+      rafRef.current = requestAnimationFrame(loop);
+    };
+    rafRef.current = requestAnimationFrame(loop);
+  }, [syncTime]);
+
+  // Stop the sync loop
+  const stopSyncLoop = useCallback(() => {
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    videoRefForSync.current = null;
   }, []);
 
   // Reset session when video changes
@@ -281,6 +309,8 @@ export function useTracking({ videoPath, initialLabels, onLabelsUpdate }: UseTra
     updateAnnotations,
     seekToFrame,
     syncTime,
+    startSyncLoop,
+    stopSyncLoop,
     connect
   };
 }

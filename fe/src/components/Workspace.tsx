@@ -51,7 +51,8 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
     startTracking,
     stopTracking,
     updateAnnotations,
-    syncTime
+    startSyncLoop,
+    stopSyncLoop
   } = useTracking({
     videoPath,
     initialLabels: originalLabels,
@@ -174,14 +175,16 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
   
   // Auto-start tracking when video is playing and labels become available
   useEffect(() => {
-    if (isPlaying && originalLabels.length > 0 && !isTracking && !isStartingTracking.current) {
+    if (isPlaying && originalLabels.length > 0 && !isTracking && !isStartingTracking.current && videoRef.current) {
       isStartingTracking.current = true;
-      const currentTime = videoRef.current?.currentTime || 0;
-      startTracking(currentTime).finally(() => {
+      const video = videoRef.current;
+      startTracking(video.currentTime).then(() => {
+        startSyncLoop(video);
+      }).finally(() => {
         isStartingTracking.current = false;
       });
     }
-  }, [isPlaying, originalLabels.length, isTracking, startTracking]);
+  }, [isPlaying, originalLabels.length, isTracking, startTracking, startSyncLoop]);
   
   // Note: saveLabels function removed as it is now automatic
 
@@ -257,23 +260,21 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
              className="w-full h-full object-contain"
              onPlay={(e) => {
                setIsPlaying(true);
+               const video = e.target as HTMLVideoElement;
                // Auto-start tracking when video plays
                if (trackingEnabled && originalLabels.length > 0) {
-                 startTracking((e.target as HTMLVideoElement).currentTime);
+                 startTracking(video.currentTime).then(() => {
+                   startSyncLoop(video);
+                 });
                }
              }}
              onPause={() => {
                setIsPlaying(false);
+               stopSyncLoop();
                if (trackingEnabled) {
                  stopTracking();
                }
                saveLabels(); // Save on pause
-             }}
-             onTimeUpdate={(e) => {
-               // Sync tracker with video playback time
-               if (isTracking) {
-                 syncTime((e.target as HTMLVideoElement).currentTime);
-               }
              }}
            />
            <OverlayCanvas 
