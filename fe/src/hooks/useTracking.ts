@@ -27,6 +27,8 @@ interface TrackedLabel {
   height: number;
   // Freeform drawn points (percentage coordinates)
   points?: [number, number][];
+  // Expanded points for tracking (5 points per vertex)
+  trackingPoints?: [number, number][];
   // Tracking fields
   confidence?: number;
   deformed?: boolean;

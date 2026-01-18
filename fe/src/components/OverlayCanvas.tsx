@@ -12,6 +12,8 @@ interface Label {
   color: string;
   // Polygon/freeform points (percentage coordinates)
   points?: [number, number][];
+  // Expanded points for tracking (5 points per vertex for better accuracy)
+  trackingPoints?: [number, number][];
   // Deformable tracking fields (optional - present when tracked)
   deformed?: boolean;
   svg_path?: string;
@@ -130,13 +132,24 @@ export const OverlayCanvas = ({ labels, onLabelsChange, drawMode = 'draw' }: Ove
       const simplified = currentPoints.filter((_, i) => i % 3 === 0 || i === currentPoints.length - 1);
       const bbox = getBoundingBox(simplified);
       
+      // Expand each point to 5 points (center + 4 surrounding) for better tracking
+      const spread = 0.5; // Smaller spread for polygon vertices
+      const expandedPoints: [number, number][] = simplified.flatMap(([x, y]) => [
+        [x, y],
+        [x - spread, y],
+        [x + spread, y],
+        [x, y - spread],
+        [x, y + spread],
+      ] as [number, number][]);
+      
       if (bbox.width > 1 && bbox.height > 1) {
         const labelCount = labels.filter(l => l.prompt_type !== 'point' && l.prompt_type !== 'box').length + 1;
         const newLabel: Label = {
           id: uuidv4(),
           label: `Label ${labelCount}`,
           ...bbox,
-          points: simplified,
+          points: simplified, // Keep original for display
+          trackingPoints: expandedPoints, // Expanded points for tracking
           color: "#0ea5e9",
           prompt_type: 'draw'
         };

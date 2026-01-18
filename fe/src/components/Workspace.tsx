@@ -18,6 +18,7 @@ interface WorkspaceLabel {
   width: number;
   height: number;
   points?: [number, number][];
+  trackingPoints?: [number, number][];
   confidence?: number;
   deformed?: boolean;
   prompt_type?: 'point' | 'box' | 'draw';
