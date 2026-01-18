@@ -108,12 +108,12 @@ class PrecomputedTracker:
         
         for ann in annotations:
             ann_id = ann['id']
+            is_point = ann.get('prompt_type') == 'point'
             
-            if 'points' in ann and ann['points'] and len(ann['points']) > 2:
+            if 'points' in ann and ann['points'] and len(ann['points']) >= 1:
                 boundary_pct = np.array(ann['points'], dtype=np.float32)
                 
                 # Check if points are in percentage (0-100) or already pixels
-                # Valid percentage coords should be in 0-100 range
                 max_val = np.max(np.abs(boundary_pct))
                 if max_val <= 100:
                     # Points are in percentage, convert to pixels
@@ -121,35 +121,31 @@ class PrecomputedTracker:
                     boundary_px[:, 0] = boundary_px[:, 0] * w / 100.0
                     boundary_px[:, 1] = boundary_px[:, 1] * h / 100.0
                 else:
-                    # Points are already in some other format, likely corrupted
-                    # Fall back to using x/y/width/height
-                    print(f"[PrecomputedTracker] WARNING: points out of range (max={max_val}), using bbox")
-                    x = ann.get('x', 50) * w / 100.0
-                    y = ann.get('y', 50) * h / 100.0
-                    bw = ann.get('width', 10) * w / 100.0
-                    bh = ann.get('height', 10) * h / 100.0
-                    boundary_px = np.array([
-                        [x, y], [x + bw, y], [x + bw, y + bh], [x, y + bh]
-                    ], dtype=np.float32)
+                    # Fall back to center point
+                    cx = (ann.get('x', 50) + ann.get('width', 0) / 2) * w / 100.0
+                    cy = (ann.get('y', 50) + ann.get('height', 0) / 2) * h / 100.0
+                    boundary_px = np.array([[cx, cy]], dtype=np.float32)
             else:
-                # x/y/width/height should be in percentage (0-100)
+                # Use center of bbox
                 x_pct = ann.get('x', 50)
                 y_pct = ann.get('y', 50)
                 w_pct = ann.get('width', 10)
                 h_pct = ann.get('height', 10)
                 
-                # Validate they're in percentage range
-                if max(abs(x_pct), abs(y_pct), abs(w_pct), abs(h_pct)) > 100:
-                    print(f"[PrecomputedTracker] WARNING: bbox out of range, using defaults")
-                    x_pct, y_pct, w_pct, h_pct = 45, 45, 10, 10
-                
-                x = x_pct * w / 100.0
-                y = y_pct * h / 100.0
-                bw = w_pct * w / 100.0
-                bh = h_pct * h / 100.0
-                boundary_px = np.array([
-                    [x, y], [x + bw, y], [x + bw, y + bh], [x, y + bh]
-                ], dtype=np.float32)
+                if is_point:
+                    # Single point at center
+                    cx = (x_pct + w_pct / 2) * w / 100.0
+                    cy = (y_pct + h_pct / 2) * h / 100.0
+                    boundary_px = np.array([[cx, cy]], dtype=np.float32)
+                else:
+                    # Box corners
+                    x = x_pct * w / 100.0
+                    y = y_pct * h / 100.0
+                    bw = w_pct * w / 100.0
+                    bh = h_pct * h / 100.0
+                    boundary_px = np.array([
+                        [x, y], [x + bw, y], [x + bw, y + bh], [x, y + bh]
+                    ], dtype=np.float32)
             
             self.annotations[ann_id] = {
                 'initial_points': boundary_px.copy(),
@@ -304,11 +300,12 @@ class PrecomputedTracker:
                 'color': meta.get('color', '#0ea5e9'),
                 'x': float(x_min),
                 'y': float(y_min),
-                'width': float(x_max - x_min),
-                'height': float(y_max - y_min),
+                'width': float(x_max - x_min) if x_max > x_min else 3.0,
+                'height': float(y_max - y_min) if y_max > y_min else 3.0,
                 'points': boundary_pct.tolist(),
                 'confidence': result.confidence,
-                'visibility': result.visibility.tolist()
+                'visibility': result.visibility.tolist(),
+                'prompt_type': meta.get('prompt_type')
             })
         
         return output
