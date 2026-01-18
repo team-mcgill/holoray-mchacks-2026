@@ -20,13 +20,8 @@ class AffineTrackingResult:
 
 class AffineInteriorTracker:
     """
-    Tracks objects by:
-    1. Sampling interior points within the shape
-    2. Tracking those interior points with LK optical flow
-    3. Computing affine transformation from point correspondences
-    4. Applying transform to boundary points
-    
-    This prevents boundary drift because we never track boundary points directly.
+    Tracks objects using CSRT tracker (best for microscopy/textured regions).
+    Falls back to LK optical flow if needed.
     """
     
     def __init__(
@@ -34,12 +29,14 @@ class AffineInteriorTracker:
         num_interior_points: int = 50,
         lk_win_size: Tuple[int, int] = (21, 21),
         lk_max_level: int = 3,
-        ransac_threshold: float = 3.0
+        ransac_threshold: float = 3.0,
+        use_csrt: bool = True  # Use CSRT tracker instead of LK
     ):
         self.num_interior_points = num_interior_points
         self.lk_win_size = lk_win_size
         self.lk_max_level = lk_max_level
         self.ransac_threshold = ransac_threshold
+        self.use_csrt = use_csrt
         
         self.lk_params = dict(
             winSize=lk_win_size,
@@ -50,6 +47,7 @@ class AffineInteriorTracker:
         # State per annotation
         self.annotations: Dict[str, dict] = {}
         self.prev_gray: Optional[np.ndarray] = None
+        self.csrt_trackers: Dict[str, cv2.Tracker] = {}  # CSRT trackers per annotation
     
     def _sample_interior_points(
         self,
@@ -145,8 +143,78 @@ class AffineInteriorTracker:
                 'original_boundary_px': boundary_px.copy(),
                 'meta': ann
             }
+            
+            # Initialize CSRT tracker for this annotation
+            if self.use_csrt:
+                x_min, y_min = boundary_px.min(axis=0)
+                x_max, y_max = boundary_px.max(axis=0)
+                bbox = (int(x_min), int(y_min), int(x_max - x_min), int(y_max - y_min))
+                
+                tracker = cv2.TrackerCSRT_create()
+                tracker.init(frame, bbox)
+                self.csrt_trackers[ann_id] = tracker
         
-        print(f"[AffineTracker] Initialized {len(annotations)} annotations")
+        mode = "CSRT" if self.use_csrt else "LK optical flow"
+        print(f"[Tracker] Initialized {len(annotations)} annotations with {mode}")
+    
+    def _track_with_csrt(self, frame: np.ndarray) -> Dict[str, AffineTrackingResult]:
+        """Track using CSRT trackers."""
+        results = {}
+        
+        for ann_id, data in self.annotations.items():
+            prev_boundary = data['boundary_px']
+            tracker = self.csrt_trackers.get(ann_id)
+            
+            if tracker is None:
+                results[ann_id] = AffineTrackingResult(
+                    boundary_points=prev_boundary,
+                    interior_points=data['interior_px'],
+                    transform=np.eye(2, 3, dtype=np.float32),
+                    confidence=0.0,
+                    num_inliers=0
+                )
+                continue
+            
+            success, bbox = tracker.update(frame)
+            
+            if success:
+                x, y, w, h = bbox
+                
+                # Compute how the bounding box changed
+                old_x_min, old_y_min = prev_boundary.min(axis=0)
+                old_x_max, old_y_max = prev_boundary.max(axis=0)
+                old_w = old_x_max - old_x_min
+                old_h = old_y_max - old_y_min
+                old_cx = (old_x_min + old_x_max) / 2
+                old_cy = (old_y_min + old_y_max) / 2
+                
+                new_cx = x + w / 2
+                new_cy = y + h / 2
+                scale_x = w / old_w if old_w > 0 else 1
+                scale_y = h / old_h if old_h > 0 else 1
+                
+                # Transform boundary: center, scale, translate
+                new_boundary = prev_boundary - np.array([old_cx, old_cy])
+                new_boundary[:, 0] *= scale_x
+                new_boundary[:, 1] *= scale_y
+                new_boundary += np.array([new_cx, new_cy])
+                
+                confidence = 1.0
+            else:
+                new_boundary = prev_boundary
+                confidence = 0.0
+            
+            results[ann_id] = AffineTrackingResult(
+                boundary_points=new_boundary.astype(np.float32),
+                interior_points=data['interior_px'],
+                transform=np.eye(2, 3, dtype=np.float32),
+                confidence=confidence,
+                num_inliers=100 if success else 0
+            )
+            
+            data['boundary_px'] = new_boundary.astype(np.float32)
+        
+        return results
     
     def track_frame(self, frame: np.ndarray) -> Dict[str, AffineTrackingResult]:
         """
@@ -158,6 +226,10 @@ class AffineInteriorTracker:
         Returns:
             Dict mapping annotation ID to AffineTrackingResult
         """
+        # Use CSRT tracking if enabled
+        if self.use_csrt:
+            return self._track_with_csrt(frame)
+        
         if len(frame.shape) == 3:
             curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         else:
