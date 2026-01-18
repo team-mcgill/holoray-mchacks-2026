@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { OverlayCanvas } from './OverlayCanvas';
-import { Settings, Brush, Play, Pause, Radio, Trash2, Crosshair } from 'lucide-react';
+import { Settings, Brush, Play, Pause, Radio, Trash2, Crosshair, X, Pencil } from 'lucide-react';
 import { useTracking } from '../hooks/useTracking';
 
 const API_BASE = 'http://localhost:8000';
@@ -29,6 +29,8 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
   const [saving, setSaving] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [drawMode, setDrawMode] = useState<'draw' | 'point' | 'box'>('point');
+  const [showLabelPanel, setShowLabelPanel] = useState(false);
+  const [editingLabelId, setEditingLabelId] = useState<string | null>(null);
   const trackingEnabled = true; // Always on
   const videoRef = useRef<HTMLVideoElement>(null);
   
@@ -163,6 +165,15 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
         handleLabelsChange([]);
         saveLabels([]); // Save empty state immediately
     }
+  };
+
+  const updateLabelName = (id: string, name: string) => {
+    const updated = labels.map(l => l.id === id ? { ...l, label: name } : l);
+    handleLabelsChange(updated);
+  };
+
+  const deleteLabel = (id: string) => {
+    handleLabelsChange(labels.filter(l => l.id !== id));
   };
 
   // Update tracking when labels change (e.g., user adds new annotation)
@@ -318,7 +329,11 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
                </button>
              </div>
 
-             <button className="p-3 text-brand-secondary/60 hover:text-brand-primary hover:bg-brand-primary/5 rounded-xl transition-all group relative" title="Labels">
+             <button 
+               className={`p-3 rounded-xl transition-all group relative ${showLabelPanel ? 'text-brand-primary bg-brand-primary/10' : 'text-brand-secondary/60 hover:text-brand-primary hover:bg-brand-primary/5'}`}
+               title="Labels"
+               onClick={() => setShowLabelPanel(!showLabelPanel)}
+             >
                <div className="relative">
                  <Settings size={20} />
                  <span className="absolute -top-1 -right-1 flex h-3 w-3">
@@ -344,6 +359,62 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
              </div>
         </div>
       </div>
+
+      {/* Label Management Panel */}
+      {showLabelPanel && (
+        <div className="absolute right-4 bottom-24 z-40 bg-white/95 backdrop-blur-md shadow-xl border border-brand-primary/10 rounded-2xl p-4 w-64 max-h-80 overflow-y-auto">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-brand-secondary">Labels & Points</h3>
+            <button onClick={() => setShowLabelPanel(false)} className="text-brand-secondary/40 hover:text-brand-secondary">
+              <X size={16} />
+            </button>
+          </div>
+          {labels.length === 0 ? (
+            <p className="text-xs text-brand-secondary/50 text-center py-4">No labels yet. Draw or click to add.</p>
+          ) : (
+            <div className="space-y-2">
+              {labels.map((label) => (
+                <div key={label.id} className="flex items-center gap-2 p-2 rounded-lg bg-brand-secondary/5 hover:bg-brand-secondary/10 transition-colors group">
+                  <div 
+                    className="w-3 h-3 rounded-full flex-shrink-0" 
+                    style={{ backgroundColor: label.color }}
+                  />
+                  {editingLabelId === label.id ? (
+                    <input
+                      type="text"
+                      value={label.label}
+                      onChange={(e) => updateLabelName(label.id, e.target.value)}
+                      onBlur={() => setEditingLabelId(null)}
+                      onKeyDown={(e) => e.key === 'Enter' && setEditingLabelId(null)}
+                      className="flex-1 text-xs bg-white border border-brand-primary/20 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-brand-primary"
+                      autoFocus
+                    />
+                  ) : (
+                    <span 
+                      className="flex-1 text-xs text-brand-secondary truncate cursor-pointer hover:text-brand-primary"
+                      onClick={() => setEditingLabelId(label.id)}
+                    >
+                      {label.label}
+                    </span>
+                  )}
+                  <button 
+                    onClick={() => setEditingLabelId(label.id)}
+                    className="text-brand-secondary/30 hover:text-brand-primary opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <Pencil size={12} />
+                  </button>
+                  <button 
+                    onClick={() => deleteLabel(label.id)}
+                    className="text-brand-secondary/30 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       
     </div>
   );

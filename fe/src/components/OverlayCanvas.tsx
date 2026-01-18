@@ -72,9 +72,10 @@ export const OverlayCanvas = ({ labels, onLabelsChange, drawMode = 'draw' }: Ove
     } else if (drawMode === 'point') {
       // Point mode: create label immediately on click
       const pointSize = 3; // Small size for point marker
+      const pointCount = labels.filter(l => l.prompt_type === 'point').length + 1;
       const newLabel: Label = {
         id: uuidv4(),
-        label: "Point",
+        label: `Point ${pointCount}`,
         x: x - pointSize / 2,
         y: y - pointSize / 2,
         width: pointSize,
@@ -122,9 +123,10 @@ export const OverlayCanvas = ({ labels, onLabelsChange, drawMode = 'draw' }: Ove
       const bbox = getBoundingBox(simplified);
       
       if (bbox.width > 1 && bbox.height > 1) {
+        const labelCount = labels.filter(l => l.prompt_type === 'draw').length + 1;
         const newLabel: Label = {
           id: uuidv4(),
-          label: "New Label",
+          label: `Label ${labelCount}`,
           ...bbox,
           points: simplified,
           color: "#0ea5e9",
@@ -134,9 +136,10 @@ export const OverlayCanvas = ({ labels, onLabelsChange, drawMode = 'draw' }: Ove
         setEditingId(newLabel.id);
       }
     } else if (drawMode === 'box' && isDrawing && currentBox && currentBox.width && currentBox.width > 1 && currentBox.height && currentBox.height > 1) {
+      const boxCount = labels.filter(l => l.prompt_type === 'box').length + 1;
       const newLabel: Label = {
         id: uuidv4(),
-        label: "New Label",
+        label: `Box ${boxCount}`,
         x: currentBox.x!,
         y: currentBox.y!,
         width: currentBox.width!,
@@ -314,12 +317,21 @@ export const OverlayCanvas = ({ labels, onLabelsChange, drawMode = 'draw' }: Ove
                 <div className="absolute w-2 h-2 rounded-full border-2" style={{ borderColor: 'currentColor', backgroundColor: 'white' }} />
               </div>
               
-              {/* Label name */}
-              <div 
-                className="absolute top-full mt-1 left-1/2 -translate-x-1/2 text-[10px] text-white bg-black/60 px-1.5 py-0.5 rounded whitespace-nowrap"
-              >
-                {label.label}
-              </div>
+              {/* Label name - styled like draw labels */}
+              <svg className="absolute -top-6 left-1/2 -translate-x-1/2 w-20 h-5 overflow-visible pointer-events-none">
+                <text
+                  x="50%"
+                  y="50%"
+                  fill="white"
+                  fontSize="10"
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  className="select-none"
+                  style={{ textShadow: '0 0 3px black, 0 0 3px black' }}
+                >
+                  {label.label}
+                </text>
+              </svg>
               
               {/* Delete button on hover */}
               {editingId !== label.id && (
