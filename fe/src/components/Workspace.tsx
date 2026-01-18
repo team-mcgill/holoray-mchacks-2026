@@ -225,7 +225,7 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
             <Radio size={12} className={isTracking ? 'animate-pulse' : ''} />
             <span>
               {isTracking 
-                ? `Tracking ${processingTimeMs.toFixed(1)}ms` 
+                ? `Tracking` 
                 : isConnected 
                   ? 'Ready' 
                   : 'Tracking Off'}
