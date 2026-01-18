@@ -10,9 +10,29 @@ from models import VideoLabels, Label
 from tracking_service import tracking_manager
 import pathlib
 
+def warmup_tracker():
+    """Warmup LiteTracker model on startup to avoid first-request delay."""
+    try:
+        from tracker.lite_tracker_wrapper import LiteTrackerWrapper
+        import numpy as np
+        print("[Warmup] Initializing LiteTracker...")
+        tracker = LiteTrackerWrapper()
+        # Run a dummy forward pass
+        dummy_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        dummy_ann = [{'id': 'warmup', 'label': 'x', 'color': '#fff',
+                      'points': [[45, 45], [55, 45], [55, 55], [45, 55]],
+                      'x': 45, 'y': 45, 'width': 10, 'height': 10}]
+        tracker.initialize(dummy_frame, dummy_ann)
+        tracker.track_frame(dummy_frame)
+        print("[Warmup] LiteTracker ready!")
+    except Exception as e:
+        print(f"[Warmup] LiteTracker warmup failed: {e}")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    # Startup - warmup tracker in background
+    import threading
+    threading.Thread(target=warmup_tracker, daemon=True).start()
     yield
     # Shutdown
     tracking_manager.close_all()
@@ -231,6 +251,10 @@ async def tracking_websocket(websocket: WebSocket, session_id: str):
                     result = session.seek_to_frame(frame_idx)
                     if result:
                         await websocket.send_json(result)
+                elif action == "buffer_status":
+                    # Return buffer status so frontend knows when ready
+                    status = session.get_buffer_status()
+                    await websocket.send_json({"type": "buffer_status", **status})
                 elif action == "sync":
                     # Sync tracking with frontend video time using predictive buffer
                     current_time = data.get("time", 0.0)
@@ -241,9 +265,8 @@ async def tracking_websocket(websocket: WebSocket, session_id: str):
                             await websocket.send_json(result)
                             frame_count += 1
                             if frame_count % 30 == 0:
-                                with session.buffer_lock:
-                                    buf_size = len(session.buffer)
-                                print(f"[WS] Frame {frame_idx}, buffer: {buf_size} frames")
+                                status = session.get_buffer_status()
+                                print(f"[WS] Frame {frame_idx}, buffer: {status['size']} frames, ahead: {status['frames_ahead']}")
                         last_synced_time = current_time
                         
             except asyncio.TimeoutError:

@@ -16,6 +16,15 @@ from collections import OrderedDict
 from tracker.core import DeformableTracker, TrackingResult
 from tracker.affine_tracker import AffineInteriorTracker, AffineTrackingResult
 
+# Try to import LiteTracker
+try:
+    from tracker.lite_tracker_wrapper import LiteTrackerWrapper, LiteTrackingResult
+    LITE_TRACKER_AVAILABLE = True
+    print("[TrackingService] LiteTracker available!")
+except ImportError as e:
+    LITE_TRACKER_AVAILABLE = False
+    print(f"[TrackingService] LiteTracker not available: {e}")
+
 class VideoTrackingSession:
     """
     Manages a tracking session for a single video.
@@ -46,11 +55,20 @@ class VideoTrackingSession:
         self.frame_width = 0
         self.frame_height = 0
         
-        # Use Affine Interior Tracker (fast + no drift)
-        print("[Session] Using Affine Interior tracker")
-        self.affine_tracker = AffineInteriorTracker(
-            num_interior_points=self.tracker_config.get('num_interior_points', 50)
-        )
+        # Use LiteTracker if available (slower but more accurate for deformable tissue)
+        self.use_lite_tracker = LITE_TRACKER_AVAILABLE and self.tracker_config.get('use_lite_tracker', True)
+        
+        if self.use_lite_tracker:
+            print("[Session] Using LiteTracker (7x faster, tissue-optimized)")
+            self.tracker = LiteTrackerWrapper()
+        else:
+            print("[Session] Using Affine Interior tracker")
+            self.tracker = AffineInteriorTracker(
+                num_interior_points=self.tracker_config.get('num_interior_points', 50)
+            )
+        
+        # Keep reference for compatibility
+        self.affine_tracker = self.tracker
         
         # State
         self.current_frame = 0
@@ -112,10 +130,13 @@ class VideoTrackingSession:
         if not cap.isOpened():
             return
         
-        # Create separate tracker instance
-        tracker = AffineInteriorTracker(
-            num_interior_points=self.tracker_config.get('num_interior_points', 50)
-        )
+        # Create separate tracker instance (same type as main)
+        if self.use_lite_tracker:
+            tracker = LiteTrackerWrapper()
+        else:
+            tracker = AffineInteriorTracker(
+                num_interior_points=self.tracker_config.get('num_interior_points', 50)
+            )
         
         # Initialize at frame 0
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -205,6 +226,19 @@ class VideoTrackingSession:
         with self.buffer_lock:
             self.playback_frame = frame_idx
             return self.buffer.get(frame_idx)
+    
+    def get_buffer_status(self) -> Dict:
+        """Get current buffer status for frontend."""
+        with self.buffer_lock:
+            frames = list(self.buffer.keys())
+            return {
+                'size': len(frames),
+                'min_frame': min(frames) if frames else 0,
+                'max_frame': max(frames) if frames else 0,
+                'playback_frame': self.playback_frame,
+                'frames_ahead': (max(frames) - self.playback_frame) if frames else 0,
+                'ready': len(frames) >= 30  # Ready when we have 1 second buffered
+            }
     
     def track_next_frame(self) -> Optional[Dict]:
         """

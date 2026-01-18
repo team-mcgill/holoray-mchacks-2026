@@ -122,7 +122,6 @@ export function useTracking({ videoPath, initialLabels, onLabelsUpdate }: UseTra
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        console.log('[Tracking] Received:', data.frame_idx !== undefined ? `frame ${data.frame_idx}` : data);
         
         if (data.error) {
           console.error('[Tracking] Error:', data.error);
