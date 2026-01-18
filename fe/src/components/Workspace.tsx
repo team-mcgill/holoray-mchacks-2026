@@ -233,25 +233,6 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
           </div>
         )}
         
-         {/* Save Status Pill */}
-        <div className={`px-4 py-1.5 rounded-full text-xs font-serif font-semibold shadow-sm transition-all flex items-center gap-2 border
-          ${saving 
-            ? 'bg-amber-50 text-amber-700 border-amber-200' 
-            : 'bg-brand-primary/10 text-brand-primary border-brand-primary/20'
-          }`}
-        >
-          {saving ? (
-             <>
-               <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
-               <span>Saving...</span>
-             </>
-          ) : (
-             <>
-               <span className="w-2 h-2 rounded-full bg-brand-primary"></span>
-               <span>Saved</span>
-             </>
-          )}
-        </div>
       </div>
 
       {/* Main Canvas Area */}
