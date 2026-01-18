@@ -25,6 +25,11 @@ except ImportError as e:
     LITE_TRACKER_AVAILABLE = False
     print(f"[TrackingService] LiteTracker not available: {e}")
 
+# Import PrecomputedTracker for instant tracking from pre-processed data
+import os
+from tracker.precomputed_tracker import PrecomputedTracker, PrecomputedTrackingResult
+PRECOMPUTED_CACHE_DIR = os.path.join(os.path.dirname(__file__), "tracking_cache")
+
 class VideoTrackingSession:
     """
     Manages a tracking session for a single video.
@@ -55,14 +60,20 @@ class VideoTrackingSession:
         self.frame_width = 0
         self.frame_height = 0
         
-        # Use LiteTracker if available (slower but more accurate for deformable tissue)
-        self.use_lite_tracker = LITE_TRACKER_AVAILABLE and self.tracker_config.get('use_lite_tracker', True)
+        # Check for pre-computed tracking data first (instant, best quality)
+        self.precomputed_tracker = PrecomputedTracker(cache_dir=PRECOMPUTED_CACHE_DIR)
+        self.use_precomputed = self.precomputed_tracker.has_precomputed_data(video_path)
         
-        if self.use_lite_tracker:
-            print("[Session] Using LiteTracker (7x faster, tissue-optimized)")
+        if self.use_precomputed:
+            print("[Session] Using PrecomputedTracker (instant, pre-processed)")
+            self.precomputed_tracker.load(video_path)
+            self.tracker = self.precomputed_tracker
+        elif LITE_TRACKER_AVAILABLE and self.tracker_config.get('use_lite_tracker', False):
+            # LiteTracker is slow (~300ms/frame), only use if explicitly requested
+            print("[Session] Using LiteTracker (accurate but slow)")
             self.tracker = LiteTrackerWrapper()
         else:
-            print("[Session] Using Affine Interior tracker")
+            print("[Session] Using Affine Interior tracker (real-time)")
             self.tracker = AffineInteriorTracker(
                 num_interior_points=self.tracker_config.get('num_interior_points', 50)
             )
@@ -125,18 +136,20 @@ class VideoTrackingSession:
     
     def _tracking_worker(self):
         """Background worker that tracks ahead of playback."""
+        # If using precomputed, we can fill buffer instantly
+        if self.use_precomputed:
+            self._precomputed_buffer_fill()
+            return
+        
         # Create separate video capture for this thread
         cap = cv2.VideoCapture(self.video_path)
         if not cap.isOpened():
             return
         
-        # Create separate tracker instance (same type as main)
-        if self.use_lite_tracker:
-            tracker = LiteTrackerWrapper()
-        else:
-            tracker = AffineInteriorTracker(
-                num_interior_points=self.tracker_config.get('num_interior_points', 50)
-            )
+        # Create separate tracker instance
+        tracker = AffineInteriorTracker(
+            num_interior_points=self.tracker_config.get('num_interior_points', 50)
+        )
         
         # Initialize at frame 0
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -220,6 +233,56 @@ class VideoTrackingSession:
                     del self.buffer[k]
         
         cap.release()
+    
+    def _precomputed_buffer_fill(self):
+        """Fill buffer using precomputed tracking data (instant)."""
+        # Initialize tracker with annotations
+        cap = cv2.VideoCapture(self.video_path)
+        if not cap.isOpened():
+            return
+        
+        ret, frame = cap.read()
+        cap.release()
+        if not ret:
+            return
+        
+        self.precomputed_tracker.initialize(frame, self.annotations)
+        
+        # Pre-fill buffer for all frames (instant lookups)
+        while not self.stop_tracking.is_set():
+            with self.buffer_lock:
+                frames_ahead = len(self.buffer) - self.playback_frame
+                if frames_ahead >= self.buffer_size:
+                    time.sleep(0.01)
+                    continue
+                
+                # Fill next batch of frames
+                start_frame = max(self.buffer.keys()) + 1 if self.buffer else self.playback_frame
+                
+            for frame_idx in range(start_frame, min(start_frame + 30, self.total_frames)):
+                if self.stop_tracking.is_set():
+                    break
+                
+                results = self.precomputed_tracker.get_annotations_for_frame(frame_idx)
+                annotations_out = self.precomputed_tracker.get_annotations_dict(results, (self.frame_height, self.frame_width))
+                
+                result = {
+                    'frame_idx': frame_idx,
+                    'total_frames': self.total_frames,
+                    'fps': self.fps,
+                    'annotations': annotations_out,
+                    'processing_time_ms': 0,
+                    'method_used': 'precomputed',
+                    'current_time': frame_idx / self.fps if self.fps > 0 else 0
+                }
+                
+                with self.buffer_lock:
+                    self.buffer[frame_idx] = result
+                    # Prune old frames
+                    min_keep = max(0, self.playback_frame - 30)
+                    keys_to_remove = [k for k in self.buffer if k < min_keep]
+                    for k in keys_to_remove:
+                        del self.buffer[k]
     
     def get_annotations_for_frame(self, frame_idx: int) -> Optional[Dict]:
         """Get pre-computed annotations for a frame (O(1) lookup)."""
