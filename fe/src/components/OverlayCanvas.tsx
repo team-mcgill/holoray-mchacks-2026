@@ -326,20 +326,12 @@ export const OverlayCanvas = ({ labels, onLabelsChange, drawMode = 'draw' }: Ove
               </div>
               
               {/* Label name - styled like draw labels */}
-              <svg className="absolute -top-6 left-1/2 -translate-x-1/2 w-20 h-5 overflow-visible pointer-events-none">
-                <text
-                  x="50%"
-                  y="50%"
-                  fill="white"
-                  fontSize="10"
-                  textAnchor="middle"
-                  dominantBaseline="middle"
-                  className="select-none"
-                  style={{ textShadow: '0 0 3px black, 0 0 3px black' }}
-                >
-                  {label.label}
-                </text>
-              </svg>
+              <div 
+                className="absolute -top-5 left-1/2 -translate-x-1/2 text-[10px] text-white whitespace-nowrap pointer-events-none select-none"
+                style={{ textShadow: '0 0 3px black, 0 0 3px black' }}
+              >
+                {label.label}
+              </div>
               
               {/* Delete button on hover */}
               {editingId !== label.id && (

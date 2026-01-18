@@ -62,13 +62,9 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
   });
 
   const handleLabelsChange = useCallback((nextLabels: WorkspaceLabel[]) => {
-    if (isTracking) {
-      setLabels(nextLabels);
-      return;
-    }
     setLabels(nextLabels);
     setOriginalLabels(nextLabels);
-  }, [isTracking]);
+  }, []);
 
   // Load labels
   useEffect(() => {
@@ -176,9 +172,9 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
     handleLabelsChange(labels.filter(l => l.id !== id));
   };
 
-  // Update tracking when labels change (e.g., user adds new annotation)
+  // Update tracking when labels change (e.g., user adds/removes annotation)
   useEffect(() => {
-    if (isTracking && originalLabels.length > 0) {
+    if (isTracking) {
       const currentTime = videoRef.current?.currentTime || 0;
       updateAnnotations(originalLabels, currentTime);
     }
