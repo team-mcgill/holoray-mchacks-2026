@@ -33,7 +33,8 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
     processingTimeMs,
     startTracking,
     stopTracking,
-    updateAnnotations
+    updateAnnotations,
+    syncTime
   } = useTracking({
     videoPath,
     initialLabels: labels,
@@ -63,30 +64,43 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
       });
   }, [videoPath]);
 
-  // Auto-save labels whenever they change
-  useEffect(() => {
-    // Prevent saving if no video, or if we are currently loading initial labels for a new video
-    if (!videoPath || isLabelLoading.current) return;
-    
-    // Debounce slightly to avoid spamming while drawing? 
-    // For now, let's just save. Optimistic UI updates happen in OverlayCanvas.
+  // Save labels function - only called on specific events, not every change
+  const labelsRef = useRef(labels);
+  labelsRef.current = labels;
+  const videoPathRef = useRef(videoPath);
+  
+  const saveLabels = useCallback(() => {
+    const currentLabels = labelsRef.current;
+    const currentVideoPath = videoPathRef.current;
+    if (!currentVideoPath || isLabelLoading.current) return;
     
     setSaving(true);
     fetch(`${API_BASE}/api/labels`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ video_path: videoPath, labels })
+      body: JSON.stringify({ video_path: currentVideoPath, labels: currentLabels })
     })
     .then(res => res.json())
-    .then(() => {
-      setSaving(false);
-    })
+    .then(() => setSaving(false))
     .catch(err => {
-      console.error("Failed to auto-save", err);
+      console.error("Failed to save", err);
       setSaving(false);
     });
-
-  }, [labels, videoPath]); // Trigger on labels change
+  }, []);
+  
+  // Save when switching videos
+  useEffect(() => {
+    videoPathRef.current = videoPath;
+    return () => {
+      // Save previous video's labels when switching
+      saveLabels();
+    };
+  }, [videoPath, saveLabels]);
+  
+  // Save on unmount
+  useEffect(() => {
+    return () => saveLabels();
+  }, [saveLabels]);
 
   // Handle Play/Pause logic with tracking integration
   const togglePlay = () => {
@@ -198,6 +212,13 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
                setIsPlaying(false);
                if (trackingEnabled) {
                  stopTracking();
+               }
+               saveLabels(); // Save on pause
+             }}
+             onTimeUpdate={(e) => {
+               // Sync tracker with video playback time
+               if (isTracking) {
+                 syncTime((e.target as HTMLVideoElement).currentTime);
                }
              }}
            />

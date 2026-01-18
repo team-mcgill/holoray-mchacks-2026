@@ -12,6 +12,7 @@ from dataclasses import asdict
 import time
 
 from tracker.core import DeformableTracker, TrackingResult
+from tracker.affine_tracker import AffineInteriorTracker, AffineTrackingResult
 
 class VideoTrackingSession:
     """
@@ -43,11 +44,10 @@ class VideoTrackingSession:
         self.frame_width = 0
         self.frame_height = 0
         
-        # Tracker
-        self.tracker = DeformableTracker(
-            num_boundary_points=self.tracker_config.get('num_points', 32),
-            keyframe_interval=self.tracker_config.get('keyframe_interval', 10),
-            use_dense_tracker=self.tracker_config.get('use_dense', False)  # Start with LK only
+        # Use Affine Interior Tracker (fast + no drift)
+        print("[Session] Using Affine Interior tracker")
+        self.affine_tracker = AffineInteriorTracker(
+            num_interior_points=self.tracker_config.get('num_interior_points', 50)
         )
         
         # State
@@ -72,7 +72,7 @@ class VideoTrackingSession:
         if not ret:
             return False
         
-        self.tracker.initialize(frame, self.annotations)
+        self.affine_tracker.initialize(frame, self.annotations)
         self.current_frame = 0
         
         return True
@@ -95,15 +95,37 @@ class VideoTrackingSession:
             if not ret:
                 return None
             # Re-initialize tracker at video loop
-            self.tracker.initialize(frame, self.annotations)
+            self.affine_tracker.initialize(frame, self.annotations)
             self.current_frame = 0
-            return self._result_to_dict(self.tracker._build_result("init", time.perf_counter()))
+            return {
+                'frame_idx': 0,
+                'total_frames': self.total_frames,
+                'fps': self.fps,
+                'annotations': self.annotations,
+                'processing_time_ms': 0,
+                'method_used': 'affine_loop',
+                'current_time': 0
+            }
         
         self.current_frame += 1
-        result = self.tracker.track_frame(frame)
-        self.last_result = result
         
-        return self._result_to_dict(result)
+        import time
+        start = time.perf_counter()
+        
+        results = self.affine_tracker.track_frame(frame)
+        annotations_out = self.affine_tracker.get_annotations_dict(results, frame.shape)
+        
+        processing_time = (time.perf_counter() - start) * 1000
+        
+        return {
+            'frame_idx': self.current_frame,
+            'total_frames': self.total_frames,
+            'fps': self.fps,
+            'annotations': annotations_out,
+            'processing_time_ms': processing_time,
+            'method_used': 'affine',
+            'current_time': self.current_frame / self.fps if self.fps > 0 else 0
+        }
     
     def seek_to_frame(self, frame_idx: int) -> Optional[Dict]:
         """Seek to specific frame and re-initialize tracking."""
@@ -116,12 +138,18 @@ class VideoTrackingSession:
         if not ret:
             return None
         
-        self.tracker.initialize(frame, self.annotations)
+        self.affine_tracker.initialize(frame, self.annotations)
         self.current_frame = frame_idx
         
-        return self._result_to_dict(
-            self.tracker._build_result("seek", time.perf_counter())
-        )
+        return {
+            'frame_idx': frame_idx,
+            'total_frames': self.total_frames,
+            'fps': self.fps,
+            'annotations': self.annotations,
+            'processing_time_ms': 0,
+            'method_used': 'affine_seek',
+            'current_time': frame_idx / self.fps if self.fps > 0 else 0
+        }
     
     def update_annotations(self, annotations: List[Dict]) -> None:
         """Update annotations being tracked."""
@@ -134,7 +162,64 @@ class VideoTrackingSession:
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, current_pos - 1))
             ret, frame = self.cap.read()
             if ret:
-                self.tracker.initialize(frame, annotations)
+                self.affine_tracker.initialize(frame, annotations)
+    
+    def track_at_time(self, time_seconds: float) -> Optional[Dict]:
+        """
+        Track annotations at a specific video time.
+        This syncs the tracker with the frontend video playback.
+        """
+        if self.cap is None:
+            return None
+        
+        # Calculate frame index from time
+        target_frame = int(time_seconds * self.fps)
+        target_frame = max(0, min(target_frame, self.total_frames - 1))
+        
+        frame_diff = target_frame - self.current_frame
+        
+        # Going backward or very large jump - need to seek and re-init
+        if frame_diff < 0 or frame_diff > 30:
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+            ret, frame = self.cap.read()
+            if not ret:
+                return None
+            
+            self.affine_tracker.initialize(frame, self.annotations)
+            self.current_frame = target_frame
+            # Return annotations with points from the affine tracker
+            init_annotations = self.affine_tracker.get_annotations_dict(
+                {ann_id: AffineTrackingResult(
+                    boundary_points=data['boundary_px'],
+                    interior_points=data['interior_px'],
+                    transform=np.eye(2, 3, dtype=np.float32),
+                    confidence=1.0,
+                    num_inliers=len(data['interior_px'])
+                ) for ann_id, data in self.affine_tracker.annotations.items()},
+                frame.shape
+            )
+            return {
+                'frame_idx': target_frame,
+                'total_frames': self.total_frames,
+                'fps': self.fps,
+                'annotations': init_annotations,
+                'processing_time_ms': 0,
+                'method_used': 'affine_seek',
+                'current_time': target_frame / self.fps if self.fps > 0 else 0
+            }
+        
+        # Track forward through intermediate frames
+        result = None
+        while self.current_frame < target_frame:
+            result = self.track_next_frame()
+            if result is None:
+                break
+        
+        if result:
+            return result
+        elif self.last_result:
+            return self._result_to_dict(self.last_result)
+        return None
     
     def _result_to_dict(self, result: TrackingResult) -> Dict:
         """Convert TrackingResult to dictionary for JSON serialization."""

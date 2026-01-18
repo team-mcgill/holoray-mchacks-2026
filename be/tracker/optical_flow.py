@@ -113,10 +113,34 @@ class LucasKanadeTracker:
             )
             
             # Points with high FB error are unreliable
-            fb_threshold = 1.0  # pixels
+            fb_threshold = 2.0  # pixels (increased for medical video)
             fb_valid = fb_error < fb_threshold
             
             status = status.flatten() & back_status.flatten() & fb_valid.astype(np.uint8)
+            
+            # Apply shape regularization - prevent points from drifting too far from neighbors
+            new_points_2d = new_points.reshape(-1, 2)
+            prev_points_2d = self.prev_points.reshape(-1, 2)
+            
+            # Compute displacement of each point
+            displacements = new_points_2d - prev_points_2d
+            
+            # Compute median displacement (robust to outliers)
+            median_disp = np.median(displacements, axis=0)
+            
+            # For each point, check if its displacement is an outlier
+            disp_from_median = np.linalg.norm(displacements - median_disp, axis=1)
+            median_dev = np.median(disp_from_median)
+            
+            # Points that move very differently from the group are suspicious
+            outlier_threshold = max(3.0, median_dev * 3)  # 3 MAD or 3 pixels minimum
+            outliers = disp_from_median > outlier_threshold
+            
+            # For outlier points, use the median displacement instead
+            for i in np.where(outliers)[0]:
+                new_points_2d[i] = prev_points_2d[i] + median_disp
+            
+            new_points = new_points_2d.reshape(-1, 1, 2)
         
         # Compute confidence based on tracking error
         if err is not None:

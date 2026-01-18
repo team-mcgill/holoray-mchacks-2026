@@ -9,6 +9,8 @@ class Label(BaseModel):
     width: float
     height: float
     color: str = "#FF0000"
+    # Freeform drawn points (percentage coordinates)
+    points: Optional[List[List[float]]] = None
 
 class VideoLabels(BaseModel):
     video_path: str

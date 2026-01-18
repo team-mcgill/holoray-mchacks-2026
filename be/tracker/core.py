@@ -133,11 +133,10 @@ class DeformableTracker:
         for ann in annotations:
             ann_id = ann['id']
             
-            # Sample boundary points
+            # Sample boundary points (auto-detects freeform points if present)
             boundary_pts = sample_boundary_points(
                 ann, 
-                num_points=self.num_boundary_points,
-                shape_type="rectangle"  # or "ellipse" for circular annotations
+                num_points=self.num_boundary_points
             )
             
             # Convert from percentage to pixel coordinates
@@ -219,14 +218,31 @@ class DeformableTracker:
             ann_status = status[point_idx:point_idx + n_points]
             ann_confidence = confidence[point_idx:point_idx + n_points]
             
-            # Update points
-            tracked_ann.boundary_points = ann_points
-            tracked_ann.confidence = float(np.mean(ann_confidence[ann_status == 1])) if np.any(ann_status) else 0.0
+            # Update points - only update valid points, keep others at previous position
+            valid_mask = ann_status == 1
+            if np.any(valid_mask):
+                # For invalid points, interpolate from valid neighbors
+                if not np.all(valid_mask):
+                    valid_indices = np.where(valid_mask)[0]
+                    invalid_indices = np.where(~valid_mask)[0]
+                    for idx in invalid_indices:
+                        # Find nearest valid neighbors
+                        distances = np.abs(valid_indices - idx)
+                        nearest = valid_indices[np.argmin(distances)]
+                        # Use the valid point's displacement
+                        displacement = ann_points[nearest] - tracked_ann.boundary_points[nearest]
+                        ann_points[idx] = tracked_ann.boundary_points[idx] + displacement
+                
+                tracked_ann.boundary_points = ann_points
+                tracked_ann.confidence = float(np.mean(ann_confidence[valid_mask]))
+            else:
+                # All points lost - use median displacement from previous frame
+                tracked_ann.confidence = 0.3
+            
             tracked_ann.frames_since_anchor += 1
             
-            # Check if too many points lost
-            if np.mean(ann_status) < 0.5:
-                tracked_ann.lost = True
+            # Only mark as lost if confidence is very low for many frames
+            # (removed aggressive lost marking)
             
             point_idx += n_points
         

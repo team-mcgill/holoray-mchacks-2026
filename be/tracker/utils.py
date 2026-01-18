@@ -15,12 +15,41 @@ def sample_boundary_points(
     
     Args:
         bbox: Dictionary with x, y, width, height (in percentages 0-100)
+               Can also have 'points' array for freeform shapes
         num_points: Number of points to sample along boundary
         shape_type: "rectangle" or "ellipse"
     
     Returns:
         np.ndarray of shape (num_points, 2) with (x, y) coordinates
     """
+    # If annotation has freeform points, use those directly
+    if 'points' in bbox and bbox['points'] is not None and len(bbox['points']) > 2:
+        points = np.array(bbox['points'])
+        
+        # Resample along the path using arc-length parameterization
+        if len(points) != num_points:
+            # Compute cumulative arc length
+            diffs = np.diff(points, axis=0)
+            segment_lengths = np.sqrt((diffs ** 2).sum(axis=1))
+            cumulative_length = np.concatenate([[0], np.cumsum(segment_lengths)])
+            total_length = cumulative_length[-1]
+            
+            if total_length > 0:
+                # Sample at uniform arc-length intervals
+                target_lengths = np.linspace(0, total_length, num_points)
+                
+                # Interpolate x and y separately
+                resampled = np.zeros((num_points, 2))
+                resampled[:, 0] = np.interp(target_lengths, cumulative_length, points[:, 0])
+                resampled[:, 1] = np.interp(target_lengths, cumulative_length, points[:, 1])
+                points = resampled
+            else:
+                # Fallback for degenerate case
+                indices = np.linspace(0, len(points) - 1, num_points).astype(int)
+                points = points[indices]
+        
+        return points
+    
     x, y = bbox['x'], bbox['y']
     w, h = bbox['width'], bbox['height']
     

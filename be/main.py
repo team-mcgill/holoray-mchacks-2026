@@ -185,14 +185,17 @@ async def tracking_websocket(websocket: WebSocket, session_id: str):
     Server sends: Tracking results for each frame
     """
     await websocket.accept()
+    print(f"[WS] Connection accepted for {session_id}")
     
     session = tracking_manager.get_session(session_id)
     if session is None:
+        print(f"[WS] Session not found: {session_id}")
         await websocket.send_json({"error": "Session not found"})
         await websocket.close()
         return
     
     is_tracking = False
+    frame_count = 0
     
     try:
         while True:
@@ -200,15 +203,19 @@ async def tracking_websocket(websocket: WebSocket, session_id: str):
             try:
                 data = await asyncio.wait_for(
                     websocket.receive_json(),
-                    timeout=0.001  # Very short timeout for responsive streaming
+                    timeout=0.033  # ~30fps check rate
                 )
                 
                 action = data.get("action")
+                print(f"[WS] Received action: {action}")
                 
                 if action == "start":
                     is_tracking = True
+                    last_synced_time = -1.0
+                    print(f"[WS] Tracking started")
                 elif action == "stop":
                     is_tracking = False
+                    print(f"[WS] Tracking stopped after {frame_count} frames")
                 elif action == "update_annotations":
                     session.update_annotations(data.get("annotations", []))
                 elif action == "seek":
@@ -216,30 +223,33 @@ async def tracking_websocket(websocket: WebSocket, session_id: str):
                     result = session.seek_to_frame(frame_idx)
                     if result:
                         await websocket.send_json(result)
+                elif action == "sync":
+                    # Sync tracking with frontend video time
+                    current_time = data.get("time", 0.0)
+                    if is_tracking and current_time != last_synced_time:
+                        result = session.track_at_time(current_time)
+                        if result:
+                            await websocket.send_json(result)
+                            frame_count += 1
+                            if frame_count % 10 == 0:
+                                print(f"[WS] Sent frame {result.get('frame_idx', '?')}, annotations: {len(result.get('annotations', []))}")
+                        last_synced_time = current_time
                         
             except asyncio.TimeoutError:
                 pass  # No message received, continue tracking if active
+            except Exception as e:
+                print(f"[WS] Error receiving message: {e}")
+                break
             
-            # Stream tracking results if active
-            if is_tracking:
-                result = session.track_next_frame()
-                if result:
-                    await websocket.send_json(result)
-                    # Control frame rate (~30 FPS)
-                    await asyncio.sleep(1.0 / session.fps)
-                else:
-                    # Video ended or error
-                    await websocket.send_json({"event": "video_ended"})
-                    is_tracking = False
-            else:
-                # Not tracking, just wait for commands
-                await asyncio.sleep(0.1)
+            # Just wait for sync messages (no auto-streaming)
+            await asyncio.sleep(0.01)
                 
     except WebSocketDisconnect:
-        pass
+        print(f"[WS] Client disconnected after {frame_count} frames")
+    except Exception as e:
+        print(f"[WS] Unexpected error: {e}")
     finally:
-        # Don't close session on disconnect - it can be reused
-        pass
+        print(f"[WS] Connection closed for {session_id}")
 
 
 if __name__ == "__main__":
