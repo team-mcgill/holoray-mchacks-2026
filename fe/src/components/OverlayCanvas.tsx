@@ -1,0 +1,174 @@
+import { useRef, useState } from 'react';
+import { v4 as uuidv4 } from 'uuid';
+import { X } from 'lucide-react';
+
+interface Label {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: string;
+}
+
+interface OverlayCanvasProps {
+  labels: Label[];
+  onLabelsChange: (labels: Label[]) => void;
+}
+
+export const OverlayCanvas = ({ labels, onLabelsChange }: OverlayCanvasProps) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [currentStart, setCurrentStart] = useState<{ x: number, y: number } | null>(null);
+  const [currentBox, setCurrentBox] = useState<Partial<Label> | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    // If we are clicking on an input/button, don't start drawing
+    if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'BUTTON') return;
+
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+
+    setIsDrawing(true);
+    setCurrentStart({ x, y });
+    setCurrentBox({ x, y, width: 0, height: 0 });
+    setEditingId(null); // Deselect if drawing new
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDrawing || !currentStart || !containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const currentX = ((e.clientX - rect.left) / rect.width) * 100;
+    const currentY = ((e.clientY - rect.top) / rect.height) * 100;
+
+    const width = Math.abs(currentX - currentStart.x);
+    const height = Math.abs(currentY - currentStart.y);
+    const x = Math.min(currentX, currentStart.x);
+    const y = Math.min(currentY, currentStart.y);
+
+    setCurrentBox({ x, y, width, height });
+  };
+
+  const handleMouseUp = () => {
+    if (isDrawing && currentBox && currentBox.width && currentBox.width > 1 && currentBox.height && currentBox.height > 1) {
+      const newLabel: Label = {
+        id: uuidv4(),
+        label: "New Label",
+        x: currentBox.x!,
+        y: currentBox.y!,
+        width: currentBox.width!,
+        height: currentBox.height!,
+        color: "#0ea5e9"
+      };
+      // Optimistically add the label; parent will handle auto-save via useEffect or direct callback
+      onLabelsChange([...labels, newLabel]);
+      setEditingId(newLabel.id);
+    }
+    setIsDrawing(false);
+    setCurrentBox(null);
+    setCurrentStart(null);
+  };
+
+  const updateLabelName = (id: string, name: string) => {
+    const updated = labels.map(l => l.id === id ? { ...l, label: name } : l);
+    onLabelsChange(updated);
+  };
+  
+  const deleteLabel = (id: string) => {
+    onLabelsChange(labels.filter(l => l.id !== id));
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      className="absolute inset-0 z-10 cursor-crosshair"
+      onMouseDown={handleMouseDown}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseUp}
+      // When clicking background, deselect current label
+      onClick={() => setEditingId(null)} 
+    >
+      {/* Existing Labels */}
+      {labels.map(label => (
+        <div
+          key={label.id}
+          className="absolute border-2 pointer-events-auto group hover:border-blue-400 transition-colors"
+          style={{
+            left: `${label.x}%`,
+            top: `${label.y}%`,
+            width: `${label.width}%`,
+            height: `${label.height}%`,
+            borderColor: editingId === label.id ? '#0ea5e9' : label.color,
+            backgroundColor: `${label.color}10`
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            setEditingId(label.id);
+          }}
+        >
+          {/* Editor (Input) - Visible when selected */}
+          {editingId === label.id && (
+            <div 
+               className="absolute -top-9 left-0 bg-white shadow-lg text-xs px-2 py-1.5 rounded-lg border border-slate-200 flex items-center gap-2 whitespace-nowrap z-20 animate-in fade-in zoom-in-95 duration-100"
+               onClick={(e) => e.stopPropagation()}
+            >
+              <input 
+                className="outline-none bg-transparent w-24 font-medium text-slate-700 placeholder:text-slate-400"
+                value={label.label}
+                onChange={(e) => updateLabelName(label.id, e.target.value)}
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') setEditingId(null); // Save on Enter
+                }}
+              />
+               <button 
+                className="text-slate-400 hover:text-red-500 transition-colors p-0.5 rounded hover:bg-slate-100"
+                onClick={() => deleteLabel(label.id)}
+              >
+                <X size={14} />
+              </button>
+            </div>
+          )}
+          
+          {/* Hover Tag (when not editing) - Now includes X button */}
+          {editingId !== label.id && (
+             <div 
+               className="absolute -top-7 left-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-20"
+            >
+              <span className="bg-black/75 backdrop-blur-sm text-white text-[10px] px-2 py-1 rounded-md whitespace-nowrap font-medium shadow-sm">
+                {label.label}
+              </span>
+              <button 
+                className="bg-red-500 text-white p-1 rounded-md shadow-sm hover:bg-red-600 transition-colors"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  deleteLabel(label.id);
+                }}
+              >
+                <X size={10} />
+              </button>
+            </div>
+          )}
+        </div>
+      ))}
+
+      {/* Drawing Preview */}
+      {isDrawing && currentBox && (
+        <div
+          className="absolute border-2 border-blue-400 bg-blue-400/20"
+          style={{
+            left: `${currentBox.x}%`,
+            top: `${currentBox.y}%`,
+            width: `${currentBox.width}%`,
+            height: `${currentBox.height}%`,
+          }}
+        />
+      )}
+    </div>
+  );
+};
