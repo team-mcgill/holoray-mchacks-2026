@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { OverlayCanvas } from './OverlayCanvas';
-import { Settings, Brush, Play, Pause, Radio, Trash2, Crosshair, X, Pencil } from 'lucide-react';
+import { Settings, Brush, Play, Pause, Radio, Trash2, Crosshair, X, Pencil, Square } from 'lucide-react';
 import { useTracking } from '../hooks/useTracking';
 
 const API_BASE = 'http://localhost:8000';
@@ -304,6 +304,14 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
                >
                  <Brush size={18} />
                  <span className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-brand-secondary text-white text-[10px] py-1 px-2 rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap">Freehand</span>
+               </button>
+               <button 
+                  className={`p-2 rounded-lg transition-all relative group ${drawMode === 'box' ? 'bg-white shadow-sm text-brand-primary' : 'text-brand-secondary/60 hover:text-brand-primary'}`}
+                  title="Rectangle Tool"
+                  onClick={() => setDrawMode('box')}
+               >
+                 <Square size={18} />
+                 <span className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-brand-secondary text-white text-[10px] py-1 px-2 rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap">Rectangle</span>
                </button>
              </div>
 
