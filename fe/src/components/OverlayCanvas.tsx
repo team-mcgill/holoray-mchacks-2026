@@ -10,11 +10,17 @@ interface Label {
   width: number;
   height: number;
   color: string;
+  // Deformable tracking fields (optional - present when tracked)
+  deformed?: boolean;
+  svg_path?: string;
+  contour_points?: [number, number][];
+  confidence?: number;
 }
 
 interface OverlayCanvasProps {
   labels: Label[];
   onLabelsChange: (labels: Label[]) => void;
+  isTracking?: boolean; // When true, labels are being tracked and may deform
 }
 
 export const OverlayCanvas = ({ labels, onLabelsChange }: OverlayCanvasProps) => {
@@ -94,68 +100,123 @@ export const OverlayCanvas = ({ labels, onLabelsChange }: OverlayCanvasProps) =>
       onClick={() => setEditingId(null)} 
     >
       {/* Existing Labels */}
-      {labels.map(label => (
-        <div
-          key={label.id}
-          className="absolute border-2 pointer-events-auto group hover:border-blue-400 transition-colors"
-          style={{
-            left: `${label.x}%`,
-            top: `${label.y}%`,
-            width: `${label.width}%`,
-            height: `${label.height}%`,
-            borderColor: editingId === label.id ? '#0ea5e9' : label.color,
-            backgroundColor: `${label.color}10`
-          }}
-          onClick={(e) => {
-            e.stopPropagation();
-            setEditingId(label.id);
-          }}
-        >
-          {/* Editor (Input) - Visible when selected */}
-          {editingId === label.id && (
-            <div 
-               className="absolute -top-9 left-0 bg-white shadow-lg text-xs px-2 py-1.5 rounded-lg border border-slate-200 flex items-center gap-2 whitespace-nowrap z-20 animate-in fade-in zoom-in-95 duration-100"
-               onClick={(e) => e.stopPropagation()}
+      {labels.map(label => {
+        // Check if this is a deformed (tracked) annotation with SVG path
+        const isDeformed = label.deformed && label.svg_path;
+        
+        if (isDeformed) {
+          // Render deformed annotation using SVG path
+          return (
+            <svg
+              key={label.id}
+              className="absolute inset-0 w-full h-full pointer-events-none"
+              viewBox="0 0 100 100"
+              preserveAspectRatio="none"
             >
-              <input 
-                className="outline-none bg-transparent w-24 font-medium text-slate-700 placeholder:text-slate-400"
-                value={label.label}
-                onChange={(e) => updateLabelName(label.id, e.target.value)}
-                autoFocus
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') setEditingId(null); // Save on Enter
-                }}
-              />
-               <button 
-                className="text-slate-400 hover:text-red-500 transition-colors p-0.5 rounded hover:bg-slate-100"
-                onClick={() => deleteLabel(label.id)}
-              >
-                <X size={14} />
-              </button>
-            </div>
-          )}
-          
-          {/* Hover Tag (when not editing) - Now includes X button */}
-          {editingId !== label.id && (
-             <div 
-               className="absolute -top-7 left-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-20"
-            >
-              <span className="bg-black/75 backdrop-blur-sm text-white text-[10px] px-2 py-1 rounded-md whitespace-nowrap font-medium shadow-sm">
-                {label.label}
-              </span>
-              <button 
-                className="bg-red-500 text-white p-1 rounded-md shadow-sm hover:bg-red-600 transition-colors"
+              <path
+                d={label.svg_path}
+                fill={`${label.color}15`}
+                stroke={label.color}
+                strokeWidth="0.3"
+                className="pointer-events-auto cursor-pointer hover:stroke-blue-400 transition-colors"
                 onClick={(e) => {
                   e.stopPropagation();
-                  deleteLabel(label.id);
+                  setEditingId(label.id);
                 }}
+              />
+              {/* Label text positioned at centroid */}
+              <text
+                x={label.x + label.width / 2}
+                y={label.y - 1}
+                fill="white"
+                fontSize="2"
+                textAnchor="middle"
+                className="pointer-events-none select-none"
+                style={{ textShadow: '0 0 2px black' }}
               >
-                <X size={10} />
-              </button>
-            </div>
-          )}
-        </div>
-      ))}
+                {label.label}
+              </text>
+              {/* Confidence indicator */}
+              {label.confidence !== undefined && (
+                <text
+                  x={label.x + label.width / 2}
+                  y={label.y + label.height + 2}
+                  fill={label.confidence > 0.7 ? '#22c55e' : label.confidence > 0.4 ? '#eab308' : '#ef4444'}
+                  fontSize="1.5"
+                  textAnchor="middle"
+                  className="pointer-events-none select-none"
+                >
+                  {Math.round(label.confidence * 100)}%
+                </text>
+              )}
+            </svg>
+          );
+        }
+        
+        // Regular (non-tracked) rectangle annotation
+        return (
+          <div
+            key={label.id}
+            className="absolute border-2 pointer-events-auto group hover:border-blue-400 transition-colors"
+            style={{
+              left: `${label.x}%`,
+              top: `${label.y}%`,
+              width: `${label.width}%`,
+              height: `${label.height}%`,
+              borderColor: editingId === label.id ? '#0ea5e9' : label.color,
+              backgroundColor: `${label.color}10`
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              setEditingId(label.id);
+            }}
+          >
+            {/* Editor (Input) - Visible when selected */}
+            {editingId === label.id && (
+              <div 
+                 className="absolute -top-9 left-0 bg-white shadow-lg text-xs px-2 py-1.5 rounded-lg border border-slate-200 flex items-center gap-2 whitespace-nowrap z-20 animate-in fade-in zoom-in-95 duration-100"
+                 onClick={(e) => e.stopPropagation()}
+              >
+                <input 
+                  className="outline-none bg-transparent w-24 font-medium text-slate-700 placeholder:text-slate-400"
+                  value={label.label}
+                  onChange={(e) => updateLabelName(label.id, e.target.value)}
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') setEditingId(null);
+                  }}
+                />
+                 <button 
+                  className="text-slate-400 hover:text-red-500 transition-colors p-0.5 rounded hover:bg-slate-100"
+                  onClick={() => deleteLabel(label.id)}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            )}
+            
+            {/* Hover Tag (when not editing) */}
+            {editingId !== label.id && (
+               <div 
+                 className="absolute -top-7 left-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-20"
+              >
+                <span className="bg-black/75 backdrop-blur-sm text-white text-[10px] px-2 py-1 rounded-md whitespace-nowrap font-medium shadow-sm">
+                  {label.label}
+                </span>
+                <button 
+                  className="bg-red-500 text-white p-1 rounded-md shadow-sm hover:bg-red-600 transition-colors"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    deleteLabel(label.id);
+                  }}
+                >
+                  <X size={10} />
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
 
       {/* Drawing Preview */}
       {isDrawing && currentBox && (

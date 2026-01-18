@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { OverlayCanvas } from './OverlayCanvas';
-import { Settings, MousePointer2, Play, Pause } from 'lucide-react';
+import { Settings, MousePointer2, Play, Pause, Radio } from 'lucide-react';
+import { useTracking } from '../hooks/useTracking';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -12,10 +13,32 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
   const [labels, setLabels] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
+  const trackingEnabled = true; // Always on
   const videoRef = useRef<HTMLVideoElement>(null);
   
   // Track if we are currently loading labels to prevent auto-save from overwriting
   const isLabelLoading = useRef(false);
+  
+  // Tracking hook - updates labels with tracked positions
+  const handleTrackedLabelsUpdate = useCallback((trackedLabels: any[]) => {
+    // Only update if we have tracked labels
+    if (trackedLabels.length > 0) {
+      setLabels(trackedLabels);
+    }
+  }, []);
+  
+  const {
+    isTracking,
+    isConnected,
+    processingTimeMs,
+    startTracking,
+    stopTracking,
+    updateAnnotations
+  } = useTracking({
+    videoPath,
+    initialLabels: labels,
+    onLabelsUpdate: handleTrackedLabelsUpdate
+  });
 
   // Load labels
   useEffect(() => {
@@ -65,16 +88,32 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
 
   }, [labels, videoPath]); // Trigger on labels change
 
-  // Handle Play/Pause logic
+  // Handle Play/Pause logic with tracking integration
   const togglePlay = () => {
     if (!videoRef.current) return;
+    
     if (isPlaying) {
       videoRef.current.pause();
+      // Stop tracking when video pauses
+      if (trackingEnabled) {
+        stopTracking();
+      }
     } else {
       videoRef.current.play();
+      // Start tracking when video plays (if we have labels)
+      if (trackingEnabled && labels.length > 0) {
+        startTracking();
+      }
     }
     setIsPlaying(!isPlaying);
   };
+  
+  // Update tracking when labels change (e.g., user adds new annotation)
+  useEffect(() => {
+    if (isTracking && labels.length > 0) {
+      updateAnnotations(labels);
+    }
+  }, [labels.length]); // Only when count changes
   
   // Note: saveLabels function removed as it is now automatic
 
@@ -94,8 +133,29 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
     <div className="flex-1 flex flex-col h-full relative">
       
       {/* Top Bar - Floating Island Style */}
-      <div className="absolute top-6 left-1/2 -translate-x-1/2 z-30 flex gap-4">
-         {/* Status Pill */}
+      <div className="absolute top-6 left-1/2 -translate-x-1/2 z-30 flex gap-3">
+         {/* Tracking Status Pill */}
+        {trackingEnabled && (
+          <div className={`px-4 py-1.5 rounded-full text-xs font-semibold shadow-sm transition-all flex items-center gap-2 border
+            ${isTracking 
+              ? 'bg-blue-50 text-blue-600 border-blue-200' 
+              : isConnected
+                ? 'bg-slate-50 text-slate-600 border-slate-200'
+                : 'bg-slate-50 text-slate-400 border-slate-200'
+            }`}
+          >
+            <Radio size={12} className={isTracking ? 'animate-pulse' : ''} />
+            <span>
+              {isTracking 
+                ? `Tracking ${processingTimeMs.toFixed(1)}ms` 
+                : isConnected 
+                  ? 'Ready' 
+                  : 'Tracking Off'}
+            </span>
+          </div>
+        )}
+        
+         {/* Save Status Pill */}
         <div className={`px-4 py-1.5 rounded-full text-xs font-semibold shadow-sm transition-all flex items-center gap-2 border
           ${saving 
             ? 'bg-yellow-50 text-yellow-600 border-yellow-200' 
@@ -127,9 +187,19 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
              loop
              playsInline
              className="w-full h-full object-contain"
-             onPlay={() => setIsPlaying(true)}
-             onPause={() => setIsPlaying(false)}
-             // Hide default controls to use ours, but allow right-click controls if needed
+             onPlay={() => {
+               setIsPlaying(true);
+               // Auto-start tracking when video plays
+               if (trackingEnabled && labels.length > 0) {
+                 startTracking();
+               }
+             }}
+             onPause={() => {
+               setIsPlaying(false);
+               if (trackingEnabled) {
+                 stopTracking();
+               }
+             }}
            />
            <OverlayCanvas 
              labels={labels} 

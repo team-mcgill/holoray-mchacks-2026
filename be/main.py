@@ -1,13 +1,23 @@
 import os
 import json
-from fastapi import FastAPI, HTTPException, Body
+import asyncio
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Body, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from typing import List, Dict, Any
 from models import VideoLabels, Label
+from tracking_service import tracking_manager
 import pathlib
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    yield
+    # Shutdown
+    tracking_manager.close_all()
+
+app = FastAPI(title="HoloRay Medical Video Labeler with Motion Tracking", lifespan=lifespan)
 
 # CORS configuration
 app.add_middleware(
@@ -104,12 +114,133 @@ def get_labels(video_path: str):
 def save_labels(payload: VideoLabels):
     label_file = get_label_path(payload.video_path)
     # Convert Pydantic models to dict
-    data = [label.dict() for label in payload.labels]
+    data = [label.model_dump() for label in payload.labels]
     
     with open(label_file, "w") as f:
         json.dump(data, f, indent=2)
         
     return {"status": "success", "count": len(payload.labels)}
+
+
+# ============== TRACKING ENDPOINTS ==============
+
+@app.post("/api/tracking/start")
+def start_tracking(video_path: str, annotations: List[Dict] = Body(...)):
+    """
+    Start a tracking session for a video with given annotations.
+    """
+    # Convert relative path to absolute
+    full_path = os.path.join(os.getcwd(), video_path)
+    
+    if not os.path.exists(full_path):
+        raise HTTPException(status_code=404, detail=f"Video not found: {video_path}")
+    
+    session_id = video_path.replace("/", "_").replace("\\", "_")
+    
+    success = tracking_manager.create_session(session_id, full_path, annotations)
+    
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to open video for tracking")
+    
+    return {
+        "status": "success",
+        "session_id": session_id,
+        "message": "Tracking session started"
+    }
+
+
+@app.post("/api/tracking/frame/{session_id}")
+def track_next_frame(session_id: str):
+    """
+    Track annotations to the next frame.
+    """
+    session = tracking_manager.get_session(session_id)
+    
+    if session is None:
+        raise HTTPException(status_code=404, detail="Tracking session not found")
+    
+    result = session.track_next_frame()
+    
+    if result is None:
+        raise HTTPException(status_code=500, detail="Failed to track frame")
+    
+    return result
+
+
+@app.post("/api/tracking/stop/{session_id}")
+def stop_tracking(session_id: str):
+    """
+    Stop and close a tracking session.
+    """
+    tracking_manager.close_session(session_id)
+    return {"status": "success", "message": "Tracking session closed"}
+
+
+@app.websocket("/ws/tracking/{session_id}")
+async def tracking_websocket(websocket: WebSocket, session_id: str):
+    """
+    WebSocket endpoint for real-time tracking updates.
+    
+    Client sends: { "action": "start" | "stop" | "update_annotations", ... }
+    Server sends: Tracking results for each frame
+    """
+    await websocket.accept()
+    
+    session = tracking_manager.get_session(session_id)
+    if session is None:
+        await websocket.send_json({"error": "Session not found"})
+        await websocket.close()
+        return
+    
+    is_tracking = False
+    
+    try:
+        while True:
+            # Check for incoming messages (non-blocking with timeout)
+            try:
+                data = await asyncio.wait_for(
+                    websocket.receive_json(),
+                    timeout=0.001  # Very short timeout for responsive streaming
+                )
+                
+                action = data.get("action")
+                
+                if action == "start":
+                    is_tracking = True
+                elif action == "stop":
+                    is_tracking = False
+                elif action == "update_annotations":
+                    session.update_annotations(data.get("annotations", []))
+                elif action == "seek":
+                    frame_idx = data.get("frame", 0)
+                    result = session.seek_to_frame(frame_idx)
+                    if result:
+                        await websocket.send_json(result)
+                        
+            except asyncio.TimeoutError:
+                pass  # No message received, continue tracking if active
+            
+            # Stream tracking results if active
+            if is_tracking:
+                result = session.track_next_frame()
+                if result:
+                    await websocket.send_json(result)
+                    # Control frame rate (~30 FPS)
+                    await asyncio.sleep(1.0 / session.fps)
+                else:
+                    # Video ended or error
+                    await websocket.send_json({"event": "video_ended"})
+                    is_tracking = False
+            else:
+                # Not tracking, just wait for commands
+                await asyncio.sleep(0.1)
+                
+    except WebSocketDisconnect:
+        pass
+    finally:
+        # Don't close session on disconnect - it can be reused
+        pass
+
 
 if __name__ == "__main__":
     import uvicorn
