@@ -125,7 +125,7 @@ def save_labels(payload: VideoLabels):
 # ============== TRACKING ENDPOINTS ==============
 
 @app.post("/api/tracking/start")
-def start_tracking(video_path: str, annotations: List[Dict] = Body(...)):
+def start_tracking(video_path: str, start_time: float = 0.0, annotations: List[Dict] = Body(...)):
     """
     Start a tracking session for a video with given annotations.
     """
@@ -137,7 +137,7 @@ def start_tracking(video_path: str, annotations: List[Dict] = Body(...)):
     
     session_id = video_path.replace("/", "_").replace("\\", "_")
     
-    success = tracking_manager.create_session(session_id, full_path, annotations)
+    success = tracking_manager.create_session(session_id, full_path, annotations, start_time)
     
     if not success:
         raise HTTPException(status_code=500, detail="Failed to open video for tracking")
@@ -212,27 +212,38 @@ async def tracking_websocket(websocket: WebSocket, session_id: str):
                 if action == "start":
                     is_tracking = True
                     last_synced_time = -1.0
-                    print(f"[WS] Tracking started")
+                    # Immediately send initial annotation at exact drawn position
+                    frame_idx = session.playback_frame
+                    result = session.get_annotations_for_frame(frame_idx)
+                    if result:
+                        await websocket.send_json(result)
+                        print(f"[WS] Tracking started, sent initial frame {frame_idx}")
+                    else:
+                        print(f"[WS] Tracking started (frame {frame_idx} not yet in buffer)")
                 elif action == "stop":
                     is_tracking = False
                     print(f"[WS] Tracking stopped after {frame_count} frames")
                 elif action == "update_annotations":
-                    session.update_annotations(data.get("annotations", []))
+                    current_time = data.get("time", 0.0)
+                    session.update_annotations(data.get("annotations", []), current_time)
                 elif action == "seek":
                     frame_idx = data.get("frame", 0)
                     result = session.seek_to_frame(frame_idx)
                     if result:
                         await websocket.send_json(result)
                 elif action == "sync":
-                    # Sync tracking with frontend video time
+                    # Sync tracking with frontend video time using predictive buffer
                     current_time = data.get("time", 0.0)
                     if is_tracking and current_time != last_synced_time:
-                        result = session.track_at_time(current_time)
+                        frame_idx = int(current_time * session.fps)
+                        result = session.get_annotations_for_frame(frame_idx)
                         if result:
                             await websocket.send_json(result)
                             frame_count += 1
-                            if frame_count % 10 == 0:
-                                print(f"[WS] Sent frame {result.get('frame_idx', '?')}, annotations: {len(result.get('annotations', []))}")
+                            if frame_count % 30 == 0:
+                                with session.buffer_lock:
+                                    buf_size = len(session.buffer)
+                                print(f"[WS] Frame {frame_idx}, buffer: {buf_size} frames")
                         last_synced_time = current_time
                         
             except asyncio.TimeoutError:

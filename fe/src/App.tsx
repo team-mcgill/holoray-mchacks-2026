@@ -6,13 +6,13 @@ function App() {
   const [selectedVideo, setSelectedVideo] = useState<string | null>(null);
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden text-slate-900 font-sans bg-[#f3f4f6]">
-      {/* Sidebar - Floating Card */}
-      <div className="w-[280px] p-4 pr-0 flex flex-col h-full">
-         <div className="mb-4 pl-2 pt-2">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-slate-900 rounded-lg flex items-center justify-center text-white font-bold">H</div>
-              <h1 className="font-bold text-xl text-slate-800 tracking-tight">Holoray</h1>
+    <div className="flex h-screen w-screen overflow-hidden text-brand-secondary font-sans bg-bg-paper">
+      {/* Sidebar */}
+      <div className="w-[320px] p-6 border-r border-brand-primary/10 flex flex-col h-full bg-bg-paper">
+         <div className="mb-8">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-brand-primary rounded-sm flex items-center justify-center text-white font-serif font-bold text-xl shadow-sm">L</div>
+              <h1 className="font-serif font-bold text-3xl text-brand-primary tracking-tight">Liquid</h1>
             </div>
          </div>
          <VideoList 
@@ -22,10 +22,12 @@ function App() {
       </div>
       
       {/* Main Workspace */}
-      <div className="flex-1 h-full p-4">
-        <div className="h-full w-full bg-white/50 rounded-3xl shadow-sm border border-white/40 backdrop-blur-sm overflow-hidden flex flex-col workspace-grid relative">
-           <Workspace videoPath={selectedVideo} />
-        </div>
+      <div className="flex-1 h-full relative flex flex-col workspace-grid bg-bg-paper">
+         <div className="h-full w-full flex flex-col p-6">
+            <div className="h-full w-full rounded-sm border border-brand-primary/5 bg-white/40 shadow-sm backdrop-blur-[2px] overflow-hidden relative">
+               <Workspace videoPath={selectedVideo} />
+            </div>
+         </div>
       </div>
     </div>
   );

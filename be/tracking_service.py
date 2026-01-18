@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 from dataclasses import asdict
 import time
+import threading
+from collections import OrderedDict
 
 from tracker.core import DeformableTracker, TrackingResult
 from tracker.affine_tracker import AffineInteriorTracker, AffineTrackingResult
@@ -54,9 +56,17 @@ class VideoTrackingSession:
         self.current_frame = 0
         self.is_running = False
         self.last_result: Optional[TrackingResult] = None
+        
+        # Predictive buffer
+        self.buffer: OrderedDict[int, Dict] = OrderedDict()
+        self.buffer_size = 120  # frames to track ahead
+        self.buffer_lock = threading.Lock()
+        self.tracking_thread: Optional[threading.Thread] = None
+        self.stop_tracking = threading.Event()
+        self.playback_frame = 0  # current frontend playback position
     
-    def open_video(self) -> bool:
-        """Open video file and initialize tracker."""
+    def open_video(self, start_time: float = 0.0) -> bool:
+        """Open video file and initialize tracker at given time."""
         self.cap = cv2.VideoCapture(self.video_path)
         
         if not self.cap.isOpened():
@@ -67,15 +77,134 @@ class VideoTrackingSession:
         self.frame_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.frame_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
-        # Read first frame and initialize tracker
+        # Calculate start frame from time
+        start_frame = int(start_time * self.fps)
+        start_frame = max(0, min(start_frame, self.total_frames - 1))
+        self.playback_frame = start_frame
+        
+        # Seek to start frame
+        if start_frame > 0:
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        
         ret, frame = self.cap.read()
         if not ret:
             return False
         
         self.affine_tracker.initialize(frame, self.annotations)
-        self.current_frame = 0
+        self.current_frame = start_frame
+        
+        # Start predictive tracking thread
+        self._start_predictive_tracking()
         
         return True
+    
+    def _start_predictive_tracking(self):
+        """Start background thread for predictive tracking."""
+        self.stop_tracking.clear()
+        self.tracking_thread = threading.Thread(target=self._tracking_worker, daemon=True)
+        self.tracking_thread.start()
+        print(f"[Session] Started predictive tracking (buffer_size={self.buffer_size})")
+    
+    def _tracking_worker(self):
+        """Background worker that tracks ahead of playback."""
+        # Create separate video capture for this thread
+        cap = cv2.VideoCapture(self.video_path)
+        if not cap.isOpened():
+            return
+        
+        # Create separate tracker instance
+        tracker = AffineInteriorTracker(
+            num_interior_points=self.tracker_config.get('num_interior_points', 50)
+        )
+        
+        # Initialize at frame 0
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        ret, frame = cap.read()
+        if not ret:
+            cap.release()
+            return
+        
+        # Start from current playback position
+        start_frame = self.playback_frame
+        if start_frame > 0:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+            ret, frame = cap.read()
+            if not ret:
+                cap.release()
+                return
+        
+        # Store original annotations for initial frame (exact drawn position)
+        # This ensures no coordinate transformation affects the first frame
+        with self.buffer_lock:
+            self.buffer[start_frame] = {
+                'frame_idx': start_frame,
+                'total_frames': self.total_frames,
+                'fps': self.fps,
+                'annotations': self.annotations,  # Use ORIGINAL annotations from frontend
+                'processing_time_ms': 0,
+                'method_used': 'initial',
+                'current_time': start_frame / self.fps if self.fps > 0 else 0
+            }
+        
+        tracker.initialize(frame, self.annotations)
+        buffer_frame = start_frame
+        
+        while not self.stop_tracking.is_set():
+            # Check if we need to track more frames
+            with self.buffer_lock:
+                frames_ahead = buffer_frame - self.playback_frame
+                need_more = frames_ahead < self.buffer_size
+            
+            if not need_more:
+                time.sleep(0.005)  # Wait a bit
+                continue
+            
+            # Read and track next frame
+            ret, frame = cap.read()
+            if not ret:
+                # Loop video
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                tracker.initialize(frame, self.annotations)
+                buffer_frame = 0
+                with self.buffer_lock:
+                    self.buffer.clear()
+                continue
+            
+            buffer_frame += 1
+            
+            # Track
+            results = tracker.track_frame(frame)
+            annotations_out = tracker.get_annotations_dict(results, frame.shape)
+            
+            result = {
+                'frame_idx': buffer_frame,
+                'total_frames': self.total_frames,
+                'fps': self.fps,
+                'annotations': annotations_out,
+                'processing_time_ms': 0,
+                'method_used': 'predictive',
+                'current_time': buffer_frame / self.fps if self.fps > 0 else 0
+            }
+            
+            # Store in buffer
+            with self.buffer_lock:
+                self.buffer[buffer_frame] = result
+                # Prune old frames (keep some behind playback for seeks)
+                min_keep = max(0, self.playback_frame - 30)
+                keys_to_remove = [k for k in self.buffer if k < min_keep]
+                for k in keys_to_remove:
+                    del self.buffer[k]
+        
+        cap.release()
+    
+    def get_annotations_for_frame(self, frame_idx: int) -> Optional[Dict]:
+        """Get pre-computed annotations for a frame (O(1) lookup)."""
+        with self.buffer_lock:
+            self.playback_frame = frame_idx
+            return self.buffer.get(frame_idx)
     
     def track_next_frame(self) -> Optional[Dict]:
         """
@@ -151,18 +280,31 @@ class VideoTrackingSession:
             'current_time': frame_idx / self.fps if self.fps > 0 else 0
         }
     
-    def update_annotations(self, annotations: List[Dict]) -> None:
-        """Update annotations being tracked."""
+    def update_annotations(self, annotations: List[Dict], current_time: float = 0.0) -> None:
+        """Update annotations being tracked - clears buffer and restarts tracking."""
         self.annotations = annotations
+        self.playback_frame = int(current_time * self.fps)  # Start from correct frame
         
-        # Re-initialize tracker with new annotations on current frame
+        # Stop current tracking thread
+        self.stop_tracking.set()
+        if self.tracking_thread and self.tracking_thread.is_alive():
+            self.tracking_thread.join(timeout=1.0)
+        
+        # Clear buffer
+        with self.buffer_lock:
+            self.buffer.clear()
+        
+        # Re-initialize main tracker
         if self.cap is not None:
             current_pos = self.cap.get(cv2.CAP_PROP_POS_FRAMES)
-            # Go back one frame since we already read it
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, current_pos - 1))
             ret, frame = self.cap.read()
             if ret:
                 self.affine_tracker.initialize(frame, annotations)
+        
+        # Restart predictive tracking from current playback position
+        self._start_predictive_tracking()
+        print(f"[Session] Annotations updated, buffer cleared, tracking restarted")
     
     def track_at_time(self, time_seconds: float) -> Optional[Dict]:
         """
@@ -234,7 +376,10 @@ class VideoTrackingSession:
         }
     
     def close(self) -> None:
-        """Release video capture."""
+        """Release video capture and stop tracking thread."""
+        self.stop_tracking.set()
+        if self.tracking_thread and self.tracking_thread.is_alive():
+            self.tracking_thread.join(timeout=1.0)
         if self.cap is not None:
             self.cap.release()
             self.cap = None
@@ -252,14 +397,15 @@ class TrackingManager:
         self,
         session_id: str,
         video_path: str,
-        annotations: List[Dict]
+        annotations: List[Dict],
+        start_time: float = 0.0
     ) -> bool:
         """Create a new tracking session."""
         if session_id in self.sessions:
             self.sessions[session_id].close()
         
         session = VideoTrackingSession(video_path, annotations)
-        if not session.open_video():
+        if not session.open_video(start_time):
             return False
         
         self.sessions[session_id] = session
@@ -271,9 +417,9 @@ class TrackingManager:
     
     def close_session(self, session_id: str) -> None:
         """Close and remove session."""
-        if session_id in self.sessions:
-            self.sessions[session_id].close()
-            del self.sessions[session_id]
+        session = self.sessions.pop(session_id, None)
+        if session:
+            session.close()
     
     def close_all(self) -> None:
         """Close all sessions."""

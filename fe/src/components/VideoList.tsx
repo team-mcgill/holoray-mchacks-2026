@@ -32,13 +32,13 @@ const FileTreeItem = ({ node, level, onSelect, selectedPath, defaultOpen }: { no
     return (
       <div className="select-none">
         <div 
-          className="flex items-center gap-2 py-1.5 hover:bg-slate-100 cursor-pointer text-slate-600 transition-colors rounded-md mx-2"
+          className="flex items-center gap-2 py-1.5 hover:bg-brand-primary/5 cursor-pointer text-brand-secondary/80 transition-colors rounded-sm mx-2"
           style={{ paddingLeft }}
           onClick={() => setIsOpen(!isOpen)}
         >
           {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          <Folder size={14} className="text-slate-400" />
-          <span className="text-sm font-medium truncate">{node.name}</span>
+          <Folder size={14} className="text-brand-primary/40" />
+          <span className="text-sm font-sans font-medium truncate">{node.name}</span>
         </div>
         {isOpen && node.children && (
           <div>
@@ -60,16 +60,16 @@ const FileTreeItem = ({ node, level, onSelect, selectedPath, defaultOpen }: { no
 
   return (
     <div 
-      className={`flex items-center gap-2 py-1.5 cursor-pointer transition-colors rounded-md mx-2
+      className={`flex items-center gap-2 py-1.5 cursor-pointer transition-colors rounded-sm mx-2
         ${isSelected 
-          ? 'bg-blue-50 text-blue-600' 
-          : 'text-slate-500 hover:bg-slate-100'
+          ? 'bg-brand-primary/10 text-brand-primary font-medium' 
+          : 'text-brand-secondary/70 hover:bg-brand-primary/5'
         }`}
       style={{ paddingLeft }}
       onClick={() => onSelect(node.path)}
     >
-      <FileVideo size={14} />
-      <span className="text-sm truncate">{node.name}</span>
+      <FileVideo size={14} className={isSelected ? 'text-brand-primary' : 'opacity-70'} />
+      <span className="text-sm font-sans truncate">{node.name}</span>
     </div>
   );
 };
@@ -123,30 +123,30 @@ export const VideoList = ({ onSelectVideo, selectedVideo }: VideoListProps) => {
   const filteredTree = filterTree(tree, searchQuery);
 
   return (
-    <div className="h-full flex flex-col bg-white/50 backdrop-blur-xl rounded-2xl shadow-lg border border-white/20 overflow-hidden">
+    <div className="h-full flex flex-col bg-transparent overflow-hidden">
       {/* Header */}
-      <div className="p-4 border-b border-slate-100">
-        <h2 className="font-semibold text-slate-800 text-lg mb-4">Assets</h2>
+      <div className="pb-4">
+        <h2 className="font-serif font-semibold text-brand-secondary text-lg mb-4 pl-1">Assets</h2>
         
         {/* Search / Filter (Visual only for now) */}
         <div className="relative group">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-500 transition-colors" />
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-secondary/40 group-focus-within:text-brand-primary transition-colors" />
           <input 
             type="text" 
             placeholder="Search..." 
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-slate-50 border border-transparent focus:border-blue-200 focus:bg-white text-sm rounded-xl pl-9 pr-3 py-2 outline-none transition-all"
+            className="w-full bg-white/40 border border-brand-primary/10 focus:border-brand-primary/30 focus:bg-white/60 text-brand-secondary text-sm rounded-sm pl-9 pr-3 py-2 outline-none transition-all placeholder:text-brand-secondary/30"
           />
         </div>
       </div>
 
       {/* Tree */}
-      <div className="flex-1 overflow-y-auto py-3 custom-scrollbar">
+      <div className="flex-1 overflow-y-auto py-1 custom-scrollbar -ml-2">
         {loading ? (
-          <div className="p-4 text-sm text-slate-400 text-center animate-pulse">Loading dataset...</div>
+          <div className="p-4 text-sm text-brand-secondary/40 text-center animate-pulse font-serif italic">Loading dataset...</div>
         ) : filteredTree.length === 0 ? (
-          <div className="p-4 text-sm text-slate-400 text-center">No assets found</div>
+          <div className="p-4 text-sm text-brand-secondary/40 text-center font-serif italic">No assets found</div>
         ) : (
           filteredTree.map((node) => (
             <FileTreeItem 
@@ -162,7 +162,7 @@ export const VideoList = ({ onSelectVideo, selectedVideo }: VideoListProps) => {
       </div>
       
       {/* Footer / Stats */}
-      <div className="p-3 bg-slate-50/50 border-t border-slate-100 text-[10px] text-slate-400 flex justify-between">
+      <div className="pt-4 border-t border-brand-primary/10 text-[10px] text-brand-secondary/40 flex justify-between font-serif uppercase tracking-widest">
         <span>Dataset v1.0</span>
         <span>{tree.length} Root Items</span>
       </div>

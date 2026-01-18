@@ -61,9 +61,9 @@ export function useTracking({ videoPath, initialLabels, onLabelsUpdate }: UseTra
   labelsRef.current = initialLabels;
 
   // Start tracking session with current labels
-  const startSession = useCallback(async (labels?: TrackedLabel[]) => {
+  const startSession = useCallback(async (labels?: TrackedLabel[], startTime: number = 0) => {
     const currentLabels = labels || labelsRef.current;
-    console.log('[Tracking] startSession called with', currentLabels.length, 'labels, video:', videoPath);
+    console.log('[Tracking] startSession called with', currentLabels.length, 'labels, video:', videoPath, 'startTime:', startTime);
     
     if (!videoPath || currentLabels.length === 0) {
       console.log('[Tracking] Cannot start session: no video or no labels');
@@ -72,7 +72,7 @@ export function useTracking({ videoPath, initialLabels, onLabelsUpdate }: UseTra
 
     try {
       console.log('[Tracking] Creating session with annotations:', currentLabels);
-      const response = await fetch(`${API_BASE}/api/tracking/start?video_path=${encodeURIComponent(videoPath)}`, {
+      const response = await fetch(`${API_BASE}/api/tracking/start?video_path=${encodeURIComponent(videoPath)}&start_time=${startTime}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(currentLabels)
@@ -93,10 +93,10 @@ export function useTracking({ videoPath, initialLabels, onLabelsUpdate }: UseTra
   }, [videoPath]);
 
   // Connect to WebSocket for real-time updates
-  const connect = useCallback(async (labels?: TrackedLabel[]): Promise<boolean> => {
+  const connect = useCallback(async (labels?: TrackedLabel[], startTime: number = 0): Promise<boolean> => {
     let sid = sessionId;
     if (!sid) {
-      sid = await startSession(labels);
+      sid = await startSession(labels, startTime);
       if (!sid) {
         console.log('[Tracking] No session ID, cannot connect');
         return false;
@@ -176,21 +176,26 @@ export function useTracking({ videoPath, initialLabels, onLabelsUpdate }: UseTra
   }, [sessionId, startSession, onLabelsUpdate]);
 
   // Start tracking
-  const startTracking = useCallback(async () => {
+  const startTracking = useCallback(async (startTime: number = 0) => {
     const currentLabels = labelsRef.current;
-    console.log('[Tracking] startTracking called with', currentLabels.length, 'labels');
+    console.log('[Tracking] startTracking called with', currentLabels.length, 'labels, startTime:', startTime);
     
     if (currentLabels.length === 0) {
       console.log('[Tracking] No labels to track');
       return;
     }
     
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      const connected = await connect(currentLabels);
-      if (!connected) {
-        console.log('[Tracking] Failed to connect');
-        return;
-      }
+    // Always close existing connection and create fresh session with current time/annotations
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    setSessionId(null);
+    
+    const connected = await connect(currentLabels, startTime);
+    if (!connected) {
+      console.log('[Tracking] Failed to connect');
+      return;
     }
     
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -209,11 +214,12 @@ export function useTracking({ videoPath, initialLabels, onLabelsUpdate }: UseTra
   }, []);
 
   // Update annotations being tracked
-  const updateAnnotations = useCallback((labels: TrackedLabel[]) => {
+  const updateAnnotations = useCallback((labels: TrackedLabel[], currentTime: number = 0) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         action: 'update_annotations',
-        annotations: labels
+        annotations: labels,
+        time: currentTime
       }));
     }
   }, []);

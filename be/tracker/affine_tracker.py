@@ -48,6 +48,10 @@ class AffineInteriorTracker:
         self.annotations: Dict[str, dict] = {}
         self.prev_gray: Optional[np.ndarray] = None
         self.csrt_trackers: Dict[str, cv2.Tracker] = {}  # CSRT trackers per annotation
+        
+        # Downscaling for performance (CSRT is slow on large frames)
+        self.max_tracking_dim = 640
+        self.tracking_scale = 1.0
     
     def _sample_interior_points(
         self,
@@ -113,6 +117,10 @@ class AffineInteriorTracker:
             self.prev_gray = frame.copy()
         
         h, w = frame.shape[:2]
+        
+        # Calculate downscale factor for tracking
+        self.tracking_scale = min(1.0, self.max_tracking_dim / max(h, w))
+        
         self.annotations = {}
         
         for ann in annotations:
@@ -144,14 +152,24 @@ class AffineInteriorTracker:
                 'meta': ann
             }
             
-            # Initialize CSRT tracker for this annotation
+            # Initialize CSRT tracker for this annotation (on scaled frame)
             if self.use_csrt:
                 x_min, y_min = boundary_px.min(axis=0)
                 x_max, y_max = boundary_px.max(axis=0)
-                bbox = (int(x_min), int(y_min), int(x_max - x_min), int(y_max - y_min))
+                
+                # Scale bbox for tracking
+                s = self.tracking_scale
+                scaled_bbox = (int(x_min * s), int(y_min * s), 
+                              int((x_max - x_min) * s), int((y_max - y_min) * s))
+                
+                # Create scaled frame for tracker init
+                if s < 1.0:
+                    scaled_frame = cv2.resize(frame, None, fx=s, fy=s)
+                else:
+                    scaled_frame = frame
                 
                 tracker = cv2.TrackerCSRT_create()
-                tracker.init(frame, bbox)
+                tracker.init(scaled_frame, scaled_bbox)
                 self.csrt_trackers[ann_id] = tracker
         
         mode = "CSRT" if self.use_csrt else "LK optical flow"
@@ -160,6 +178,13 @@ class AffineInteriorTracker:
     def _track_with_csrt(self, frame: np.ndarray) -> Dict[str, AffineTrackingResult]:
         """Track using CSRT trackers."""
         results = {}
+        
+        # Downscale frame for faster tracking
+        s = self.tracking_scale
+        if s < 1.0:
+            scaled_frame = cv2.resize(frame, None, fx=s, fy=s)
+        else:
+            scaled_frame = frame
         
         for ann_id, data in self.annotations.items():
             prev_boundary = data['boundary_px']
@@ -175,10 +200,14 @@ class AffineInteriorTracker:
                 )
                 continue
             
-            success, bbox = tracker.update(frame)
+            success, bbox = tracker.update(scaled_frame)
             
             if success:
                 x, y, w, h = bbox
+                
+                # Scale bbox back to original resolution
+                if s < 1.0:
+                    x, y, w, h = x / s, y / s, w / s, h / s
                 
                 # Compute how the bounding box changed
                 old_x_min, old_y_min = prev_boundary.min(axis=0)
