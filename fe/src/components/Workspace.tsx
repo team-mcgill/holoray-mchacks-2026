@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { OverlayCanvas } from './OverlayCanvas';
-import { Settings, Brush, Play, Pause, Radio, Trash2 } from 'lucide-react';
+import { Settings, Brush, Play, Pause, Radio, Trash2, Crosshair } from 'lucide-react';
 import { useTracking } from '../hooks/useTracking';
 
 const API_BASE = 'http://localhost:8000';
@@ -9,10 +9,26 @@ interface WorkspaceProps {
   videoPath: string | null;
 }
 
+interface WorkspaceLabel {
+  id: string;
+  label: string;
+  color: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  points?: [number, number][];
+  confidence?: number;
+  deformed?: boolean;
+  prompt_type?: 'point' | 'box' | 'draw';
+}
+
 export const Workspace = ({ videoPath }: WorkspaceProps) => {
-  const [labels, setLabels] = useState<any[]>([]);
+  const [labels, setLabels] = useState<WorkspaceLabel[]>([]);
+  const [originalLabels, setOriginalLabels] = useState<WorkspaceLabel[]>([]);
   const [saving, setSaving] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [drawMode, setDrawMode] = useState<'draw' | 'point' | 'box'>('point');
   const trackingEnabled = true; // Always on
   const videoRef = useRef<HTMLVideoElement>(null);
   
@@ -21,8 +37,8 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
   const isStartingTracking = useRef(false);
   
   // Tracking hook - updates labels with tracked positions
-  const handleTrackedLabelsUpdate = useCallback((trackedLabels: any[]) => {
-    // Only update if we have tracked labels
+  const handleTrackedLabelsUpdate = useCallback((trackedLabels: WorkspaceLabel[]) => {
+    // Only update the tracked overlay; preserve original labels for tracking init
     if (trackedLabels.length > 0) {
       setLabels(trackedLabels);
     }
@@ -38,14 +54,22 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
     syncTime
   } = useTracking({
     videoPath,
-    initialLabels: labels,
+    initialLabels: originalLabels,
     onLabelsUpdate: handleTrackedLabelsUpdate
   });
+
+  const handleLabelsChange = useCallback((nextLabels: WorkspaceLabel[]) => {
+    if (isTracking) {
+      setLabels(nextLabels);
+      return;
+    }
+    setLabels(nextLabels);
+    setOriginalLabels(nextLabels);
+  }, [isTracking]);
 
   // Load labels
   useEffect(() => {
     if (!videoPath) {
-      setLabels([]);
       return;
     }
 
@@ -53,7 +77,7 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
     fetch(`${API_BASE}/api/labels?video_path=${encodeURIComponent(videoPath)}`)
       .then(res => res.json())
       .then(data => {
-        setLabels(data);
+        handleLabelsChange(data);
         // Small delay to ensure the state update is processed before we allow saving again
         setTimeout(() => {
           isLabelLoading.current = false;
@@ -61,17 +85,26 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
       })
       .catch(err => {
         console.error("Failed to load labels", err);
+        handleLabelsChange([]);
         isLabelLoading.current = false;
       });
-  }, [videoPath]);
+  }, [handleLabelsChange, videoPath]);
 
   // Save labels function - only called on specific events, not every change
   const labelsRef = useRef(labels);
-  labelsRef.current = labels;
+  const originalLabelsRef = useRef(originalLabels);
   const videoPathRef = useRef(videoPath);
+
+  useEffect(() => {
+    labelsRef.current = labels;
+  }, [labels]);
+
+  useEffect(() => {
+    originalLabelsRef.current = originalLabels;
+  }, [originalLabels]);
   
-  const saveLabels = useCallback((labelsOverride?: any[]) => {
-    const currentLabels = labelsOverride || labelsRef.current;
+  const saveLabels = useCallback((labelsOverride?: WorkspaceLabel[]) => {
+    const currentLabels = labelsOverride || originalLabelsRef.current;
     const currentVideoPath = videoPathRef.current;
     if (!currentVideoPath || isLabelLoading.current) return;
     
@@ -96,7 +129,7 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
       // Save previous video's labels when switching
       saveLabels();
     };
-  }, [videoPath, saveLabels]);
+  }, [saveLabels, videoPath]);
   
   // Save on unmount
   useEffect(() => {
@@ -116,7 +149,7 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
     } else {
       videoRef.current.play();
       // Start tracking when video plays (if we have labels)
-      if (trackingEnabled && labels.length > 0) {
+      if (trackingEnabled && originalLabels.length > 0) {
         startTracking(videoRef.current.currentTime);
       }
     }
@@ -126,29 +159,29 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
   const clearLabels = () => {
     if (labels.length === 0) return;
     if (window.confirm("Are you sure you want to clear all labels? This cannot be undone.")) {
-        setLabels([]);
+        handleLabelsChange([]);
         saveLabels([]); // Save empty state immediately
     }
   };
 
   // Update tracking when labels change (e.g., user adds new annotation)
   useEffect(() => {
-    if (isTracking && labels.length > 0) {
+    if (isTracking && originalLabels.length > 0) {
       const currentTime = videoRef.current?.currentTime || 0;
-      updateAnnotations(labels, currentTime);
+      updateAnnotations(originalLabels, currentTime);
     }
-  }, [labels.length]); // Only when count changes
+  }, [isTracking, originalLabels, updateAnnotations]);
   
   // Auto-start tracking when video is playing and labels become available
   useEffect(() => {
-    if (isPlaying && labels.length > 0 && !isTracking && !isStartingTracking.current) {
+    if (isPlaying && originalLabels.length > 0 && !isTracking && !isStartingTracking.current) {
       isStartingTracking.current = true;
       const currentTime = videoRef.current?.currentTime || 0;
       startTracking(currentTime).finally(() => {
         isStartingTracking.current = false;
       });
     }
-  }, [isPlaying, labels.length, isTracking, startTracking]);
+  }, [isPlaying, originalLabels.length, isTracking, startTracking]);
   
   // Note: saveLabels function removed as it is now automatic
 
@@ -225,7 +258,7 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
              onPlay={(e) => {
                setIsPlaying(true);
                // Auto-start tracking when video plays
-               if (trackingEnabled && labels.length > 0) {
+               if (trackingEnabled && originalLabels.length > 0) {
                  startTracking((e.target as HTMLVideoElement).currentTime);
                }
              }}
@@ -245,13 +278,14 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
            />
            <OverlayCanvas 
              labels={labels} 
-             onLabelsChange={setLabels} 
+             onLabelsChange={handleLabelsChange}
+             drawMode={drawMode}
            />
         </div>
       </div>
       
-      {/* Bottom Info Bar - Floating */}
-      <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30">
+      {/* Bottom Info Bar */}
+      <div className="w-full flex justify-center pt-4 z-30">
         <div className="bg-white/95 backdrop-blur-md shadow-lg border border-brand-primary/10 rounded-2xl p-2 px-4 flex items-center gap-4">
              
              {/* Play/Pause Control */}
@@ -263,10 +297,26 @@ export const Workspace = ({ videoPath }: WorkspaceProps) => {
                {isPlaying ? <Pause size={20} /> : <Play size={20} />}
              </button>
 
-             <button className="p-3 text-brand-secondary/60 hover:text-brand-primary hover:bg-brand-primary/5 rounded-xl transition-all group relative" title="Draw">
-               <Brush size={20} />
-               <span className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-brand-secondary text-white text-[10px] py-1 px-2 rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap">Draw Tool</span>
-             </button>
+             {/* Draw Mode Toggles */}
+             <div className="flex bg-brand-secondary/5 rounded-xl p-1 gap-1">
+               <button 
+                  className={`p-2 rounded-lg transition-all relative group ${drawMode === 'point' ? 'bg-white shadow-sm text-brand-primary' : 'text-brand-secondary/60 hover:text-brand-primary'}`}
+                  title="Point Tool"
+                  onClick={() => setDrawMode('point')}
+               >
+                 <Crosshair size={18} />
+                 <span className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-brand-secondary text-white text-[10px] py-1 px-2 rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap">Point Selector</span>
+               </button>
+               <button 
+                  className={`p-2 rounded-lg transition-all relative group ${drawMode === 'draw' ? 'bg-white shadow-sm text-brand-primary' : 'text-brand-secondary/60 hover:text-brand-primary'}`}
+                  title="Freehand Tool"
+                  onClick={() => setDrawMode('draw')}
+               >
+                 <Brush size={18} />
+                 <span className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-brand-secondary text-white text-[10px] py-1 px-2 rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap">Freehand</span>
+               </button>
+             </div>
+
              <button className="p-3 text-brand-secondary/60 hover:text-brand-primary hover:bg-brand-primary/5 rounded-xl transition-all group relative" title="Labels">
                <div className="relative">
                  <Settings size={20} />

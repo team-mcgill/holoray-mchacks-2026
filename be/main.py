@@ -232,6 +232,21 @@ async def tracking_websocket(websocket: WebSocket, session_id: str):
                 if action == "start":
                     is_tracking = True
                     last_synced_time = -1.0
+                    
+                    # Wait for buffer if using predictive tracker (unless precomputed)
+                    if session and not session.use_precomputed:
+                        print("[WS] Waiting for buffer fill (realtime mimic)...")
+                        # Send status to frontend
+                        await websocket.send_json({"type": "buffer_status", "ready": False, "message": "Buffering..."})
+                        
+                        # Wait for ~1s of frames
+                        for _ in range(50): # Max 5s wait
+                            status = session.get_buffer_status()
+                            if status['ready']: # ready = len >= 30
+                                break
+                            await asyncio.sleep(0.1)
+                        print("[WS] Buffer ready, starting stream")
+                    
                     # Immediately send initial annotation at exact drawn position
                     frame_idx = session.playback_frame
                     result = session.get_annotations_for_frame(frame_idx)

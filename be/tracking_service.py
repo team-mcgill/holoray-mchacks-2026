@@ -30,6 +30,9 @@ import os
 from tracker.precomputed_tracker import PrecomputedTracker, PrecomputedTrackingResult
 PRECOMPUTED_CACHE_DIR = os.path.join(os.path.dirname(__file__), "tracking_cache")
 
+# Global cache for loaded precomputed tracking data (load once per video)
+_precomputed_cache: Dict[str, dict] = {}
+
 class VideoTrackingSession:
     """
     Manages a tracking session for a single video.
@@ -50,6 +53,9 @@ class VideoTrackingSession:
             tracker_config: Optional tracker configuration
         """
         self.video_path = video_path
+        # Store a deep copy of original annotations (before any tracking modifies them)
+        import copy
+        self.original_annotations = copy.deepcopy(annotations)
         self.annotations = annotations
         self.tracker_config = tracker_config or {}
         
@@ -63,6 +69,8 @@ class VideoTrackingSession:
         # Check for pre-computed tracking data first (instant, best quality)
         self.precomputed_tracker = PrecomputedTracker(cache_dir=PRECOMPUTED_CACHE_DIR)
         self.use_precomputed = self.precomputed_tracker.has_precomputed_data(video_path)
+        
+
         
         if self.use_precomputed:
             print("[Session] Using PrecomputedTracker (instant, pre-processed)")
@@ -126,7 +134,7 @@ class VideoTrackingSession:
         self._start_predictive_tracking()
         
         return True
-    
+
     def _start_predictive_tracking(self):
         """Start background thread for predictive tracking."""
         self.stop_tracking.clear()
@@ -246,7 +254,9 @@ class VideoTrackingSession:
         if not ret:
             return
         
-        self.precomputed_tracker.initialize(frame, self.annotations)
+        # Initialize at playback_frame (where user drew annotation)
+        # Use ORIGINAL annotations (not tracked/modified ones)
+        self.precomputed_tracker.initialize(frame, self.original_annotations, start_frame=self.playback_frame)
         
         # Pre-fill buffer for all frames (instant lookups)
         while not self.stop_tracking.is_set():
@@ -257,9 +267,14 @@ class VideoTrackingSession:
                     continue
                 
                 # Fill next batch of frames
-                start_frame = max(self.buffer.keys()) + 1 if self.buffer else self.playback_frame
+                fill_start = max(self.buffer.keys()) + 1 if self.buffer else self.playback_frame
                 
-            for frame_idx in range(start_frame, min(start_frame + 30, self.total_frames)):
+            # If we've reached the end, stop filling (video will loop, new session created)
+            if fill_start >= self.total_frames:
+                time.sleep(0.01)
+                continue
+            
+            for frame_idx in range(fill_start, min(fill_start + 30, self.total_frames)):
                 if self.stop_tracking.is_set():
                     break
                 
@@ -286,6 +301,22 @@ class VideoTrackingSession:
     
     def get_annotations_for_frame(self, frame_idx: int) -> Optional[Dict]:
         """Get pre-computed annotations for a frame (O(1) lookup)."""
+        # For precomputed tracker, compute directly - no buffer needed
+        if self.use_precomputed:
+            # Wrap around for looping videos
+            wrapped_idx = frame_idx % self.total_frames if self.total_frames > 0 else frame_idx
+            results = self.precomputed_tracker.get_annotations_for_frame(wrapped_idx)
+            annotations_out = self.precomputed_tracker.get_annotations_dict(results, (self.frame_height, self.frame_width))
+            return {
+                'frame_idx': frame_idx,
+                'total_frames': self.total_frames,
+                'fps': self.fps,
+                'annotations': annotations_out,
+                'processing_time_ms': 0,
+                'method_used': 'precomputed',
+                'current_time': frame_idx / self.fps if self.fps > 0 else 0
+            }
+        
         with self.buffer_lock:
             self.playback_frame = frame_idx
             return self.buffer.get(frame_idx)
@@ -379,6 +410,8 @@ class VideoTrackingSession:
     
     def update_annotations(self, annotations: List[Dict], current_time: float = 0.0) -> None:
         """Update annotations being tracked - clears buffer and restarts tracking."""
+        import copy
+        self.original_annotations = copy.deepcopy(annotations)  # Store clean copy
         self.annotations = annotations
         self.playback_frame = int(current_time * self.fps)  # Start from correct frame
         

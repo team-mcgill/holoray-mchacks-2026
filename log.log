@@ -1,0 +1,28 @@
+🚀 Starting HoloRay Medical Video Labeler...
+
+📡 Starting backend (port 8000)...
+🎨 Starting frontend (port 5173)...
+
+✅ Services started!
+   Backend:  http://localhost:8000
+   Frontend: http://localhost:5173
+
+Press Ctrl+C to stop both services
+
+> fe@0.0.0 dev
+> vite
+
+
+  VITE v7.3.1  ready in 205 ms
+
+  ➜  Local:   http://localhost:5173/
+  ➜  Network: use --host to expose
+[TrackingService] LiteTracker available!
+
+Shutting down...
+[Warmup] Initializing LiteTracker...
+All the caches are reset.
+[LiteTracker] Loaded weights from /Users/q/Desktop/projects/holoray-mchacks-2026/be/tracker/../lite-tracker/weights/scaled_online.pth
+All the caches are reset.
+[LiteTracker] Initialized 1 annotations, 4 points on mps
+[Warmup] LiteTracker ready!

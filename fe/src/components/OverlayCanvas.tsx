@@ -17,9 +17,10 @@ interface Label {
   svg_path?: string;
   contour_points?: [number, number][];
   confidence?: number;
+  prompt_type?: 'point' | 'box' | 'draw';
 }
 
-type DrawMode = 'box' | 'draw';
+type DrawMode = 'box' | 'draw' | 'point';
 
 interface OverlayCanvasProps {
   labels: Label[];
@@ -68,6 +69,24 @@ export const OverlayCanvas = ({ labels, onLabelsChange, drawMode = 'draw' }: Ove
     
     if (drawMode === 'draw') {
       setCurrentPoints([[x, y]]);
+    } else if (drawMode === 'point') {
+      // Point mode: create label immediately on click
+      const pointSize = 3; // Small size for point marker
+      const newLabel: Label = {
+        id: uuidv4(),
+        label: "Point",
+        x: x - pointSize / 2,
+        y: y - pointSize / 2,
+        width: pointSize,
+        height: pointSize,
+        points: [[x, y]],
+        color: "#0ea5e9",
+        prompt_type: 'point'
+      };
+      onLabelsChange([...labels, newLabel]);
+      setEditingId(newLabel.id);
+      setIsDrawing(false);
+      return;
     } else {
       setCurrentBox({ x, y, width: 0, height: 0 });
     }
@@ -86,7 +105,7 @@ export const OverlayCanvas = ({ labels, onLabelsChange, drawMode = 'draw' }: Ove
       if (dist > 0.5) { // Add point every 0.5% distance
         setCurrentPoints([...currentPoints, [currentX, currentY]]);
       }
-    } else {
+    } else if (drawMode === 'box') {
       if (!currentStart) return;
       const width = Math.abs(currentX - currentStart.x);
       const height = Math.abs(currentY - currentStart.y);
@@ -108,7 +127,8 @@ export const OverlayCanvas = ({ labels, onLabelsChange, drawMode = 'draw' }: Ove
           label: "New Label",
           ...bbox,
           points: simplified,
-          color: "#0ea5e9"
+          color: "#0ea5e9",
+          prompt_type: 'draw'
         };
         onLabelsChange([...labels, newLabel]);
         setEditingId(newLabel.id);
@@ -121,7 +141,8 @@ export const OverlayCanvas = ({ labels, onLabelsChange, drawMode = 'draw' }: Ove
         y: currentBox.y!,
         width: currentBox.width!,
         height: currentBox.height!,
-        color: "#0ea5e9"
+        color: "#0ea5e9",
+        prompt_type: 'box'
       };
       onLabelsChange([...labels, newLabel]);
       setEditingId(newLabel.id);
@@ -264,6 +285,82 @@ export const OverlayCanvas = ({ labels, onLabelsChange, drawMode = 'draw' }: Ove
             </svg>
           );
         }
+
+        // Point annotation
+        if (label.prompt_type === 'point') {
+          const pointX = label.points?.[0]?.[0] ?? (label.x + label.width / 2);
+          const pointY = label.points?.[0]?.[1] ?? (label.y + label.height / 2);
+          return (
+            <div
+              key={label.id}
+              className="absolute pointer-events-auto group"
+              style={{
+                left: `${pointX}%`,
+                top: `${pointY}%`,
+                transform: 'translate(-50%, -50%)'
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                setEditingId(label.id);
+              }}
+            >
+              {/* Crosshair point marker */}
+              <div 
+                className="relative w-6 h-6 flex items-center justify-center"
+                style={{ color: editingId === label.id ? '#0ea5e9' : label.color }}
+              >
+                <div className="absolute w-4 h-0.5 rounded-full" style={{ backgroundColor: 'currentColor' }} />
+                <div className="absolute w-0.5 h-4 rounded-full" style={{ backgroundColor: 'currentColor' }} />
+                <div className="absolute w-2 h-2 rounded-full border-2" style={{ borderColor: 'currentColor', backgroundColor: 'white' }} />
+              </div>
+              
+              {/* Label name */}
+              <div 
+                className="absolute top-full mt-1 left-1/2 -translate-x-1/2 text-[10px] text-white bg-black/60 px-1.5 py-0.5 rounded whitespace-nowrap"
+              >
+                {label.label}
+              </div>
+              
+              {/* Delete button on hover */}
+              {editingId !== label.id && (
+                <div className="absolute -top-2 -right-2 opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                  <button 
+                    className="bg-red-500 text-white p-1 rounded-full shadow-sm hover:bg-red-600 transition-colors w-5 h-5 flex items-center justify-center"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteLabel(label.id);
+                    }}
+                  >
+                    <X size={10} />
+                  </button>
+                </div>
+              )}
+              
+              {/* Editor when selected */}
+              {editingId === label.id && (
+                <div 
+                  className="absolute top-full mt-6 left-1/2 -translate-x-1/2 bg-white shadow-lg text-xs px-2 py-1.5 rounded-lg border border-slate-200 flex items-center gap-2 whitespace-nowrap z-20"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <input 
+                    type="text"
+                    value={label.label}
+                    onChange={(e) => updateLabelName(label.id, e.target.value)}
+                    className="border-none bg-slate-100 px-2 py-0.5 rounded text-xs w-24 focus:outline-none focus:ring-1 focus:ring-brand-primary"
+                    autoFocus
+                    onKeyDown={(e) => e.key === 'Enter' && setEditingId(null)}
+                  />
+                  <button 
+                    className="text-slate-400 hover:text-red-500 transition-colors"
+                    onClick={(e) => { e.stopPropagation(); deleteLabel(label.id); }}
+                  >
+                    <X size={10} />
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        }
         
         // Regular rectangle annotation (fallback)
         return (
@@ -360,6 +457,8 @@ export const OverlayCanvas = ({ labels, onLabelsChange, drawMode = 'draw' }: Ove
           }}
         />
       )}
+
+
     </div>
   );
 };

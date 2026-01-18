@@ -17,6 +17,9 @@ class PrecomputedTrackingResult:
     confidence: float
 
 
+# Global cache for loaded .npz data (shared across tracker instances)
+_loaded_data_cache: Dict[str, dict] = {}
+
 class PrecomputedTracker:
     """
     Uses pre-computed dense tracking data for instant runtime tracking.
@@ -30,12 +33,22 @@ class PrecomputedTracker:
         self.annotations: Dict[str, dict] = {}
         self.frame_size: Tuple[int, int] = (0, 0)
         self.current_frame: int = 0
+        self.start_frame: int = 0  # Frame where annotations were drawn
+        self.frame_skip: int = 1
+        self.source_fps: float = 30.0
+        self.effective_fps: float = 30.0
     
     def _get_cache_path(self, video_path: str) -> str:
         """Get cache file path for a video."""
-        # Match the naming convention from preprocess_tracking.py
-        rel_path = os.path.basename(video_path)
-        # Try to find in cache dir
+        # Extract relative path from dataset folder
+        # video_path could be: /full/path/be/dataset/Echo/echo1.mp4 or dataset/Echo/echo1.mp4
+        if 'dataset' in video_path:
+            idx = video_path.find('dataset')
+            rel_path = video_path[idx + len('dataset') + 1:]  # e.g., "Echo/echo1.mp4"
+        else:
+            rel_path = os.path.basename(video_path)
+        
+        # Match naming convention from preprocess_tracking.py
         cache_name = rel_path.replace(os.sep, "__").replace("/", "__") + ".tracking.npz"
         return os.path.join(self.cache_dir, cache_name)
     
@@ -45,8 +58,20 @@ class PrecomputedTracker:
         return os.path.exists(cache_path)
     
     def load(self, video_path: str) -> bool:
-        """Load pre-computed tracking data for video."""
+        """Load pre-computed tracking data for video (uses global cache)."""
+        global _loaded_data_cache
         cache_path = self._get_cache_path(video_path)
+        
+        # Check global cache first
+        if cache_path in _loaded_data_cache:
+            self.data = _loaded_data_cache[cache_path]
+            self.video_path = video_path
+            self.frame_size = tuple(self.data['frame_size'])
+            self.frame_skip = int(self.data.get('frame_skip', 1))
+            self.source_fps = float(self.data.get('source_fps', 30))
+            self.effective_fps = float(self.data.get('fps', 30))
+            print(f"[PrecomputedTracker] Using cached data for {cache_path}")
+            return True
         
         if not os.path.exists(cache_path):
             print(f"[PrecomputedTracker] No cache found: {cache_path}")
@@ -56,36 +81,72 @@ class PrecomputedTracker:
             self.data = dict(np.load(cache_path))
             self.video_path = video_path
             self.frame_size = tuple(self.data['frame_size'])
+            self.frame_skip = int(self.data.get('frame_skip', 1))
+            self.source_fps = float(self.data.get('source_fps', 30))
+            self.effective_fps = float(self.data.get('fps', 30))
+            
+            # Store in global cache
+            _loaded_data_cache[cache_path] = self.data
+            
             print(f"[PrecomputedTracker] Loaded {cache_path}")
             print(f"  - Frames: {self.data['total_frames']}")
             print(f"  - Grid: {self.data['grid_size']}")
             print(f"  - Size: {self.frame_size}")
+            print(f"  - FPS: {self.source_fps} -> {self.effective_fps} (skip={self.frame_skip})")
             return True
         except Exception as e:
             print(f"[PrecomputedTracker] Failed to load: {e}")
             return False
     
-    def initialize(self, frame: np.ndarray, annotations: List[Dict]) -> None:
-        """Initialize with annotations (just store them, no processing needed)."""
+    def initialize(self, frame: np.ndarray, annotations: List[Dict], start_frame: int = 0) -> None:
+        """Initialize with annotations at given start frame."""
         h, w = frame.shape[:2]
         self.frame_size = (h, w)
-        self.current_frame = 0
+        self.current_frame = start_frame
+        self.start_frame = start_frame
         self.annotations = {}
         
         for ann in annotations:
             ann_id = ann['id']
             
             if 'points' in ann and ann['points'] and len(ann['points']) > 2:
-                # Points are in percentage, convert to pixels
                 boundary_pct = np.array(ann['points'], dtype=np.float32)
-                boundary_px = boundary_pct.copy()
-                boundary_px[:, 0] = boundary_px[:, 0] * w / 100.0
-                boundary_px[:, 1] = boundary_px[:, 1] * h / 100.0
+                
+                # Check if points are in percentage (0-100) or already pixels
+                # Valid percentage coords should be in 0-100 range
+                max_val = np.max(np.abs(boundary_pct))
+                if max_val <= 100:
+                    # Points are in percentage, convert to pixels
+                    boundary_px = boundary_pct.copy()
+                    boundary_px[:, 0] = boundary_px[:, 0] * w / 100.0
+                    boundary_px[:, 1] = boundary_px[:, 1] * h / 100.0
+                else:
+                    # Points are already in some other format, likely corrupted
+                    # Fall back to using x/y/width/height
+                    print(f"[PrecomputedTracker] WARNING: points out of range (max={max_val}), using bbox")
+                    x = ann.get('x', 50) * w / 100.0
+                    y = ann.get('y', 50) * h / 100.0
+                    bw = ann.get('width', 10) * w / 100.0
+                    bh = ann.get('height', 10) * h / 100.0
+                    boundary_px = np.array([
+                        [x, y], [x + bw, y], [x + bw, y + bh], [x, y + bh]
+                    ], dtype=np.float32)
             else:
-                x = ann['x'] * w / 100.0
-                y = ann['y'] * h / 100.0
-                bw = ann['width'] * w / 100.0
-                bh = ann['height'] * h / 100.0
+                # x/y/width/height should be in percentage (0-100)
+                x_pct = ann.get('x', 50)
+                y_pct = ann.get('y', 50)
+                w_pct = ann.get('width', 10)
+                h_pct = ann.get('height', 10)
+                
+                # Validate they're in percentage range
+                if max(abs(x_pct), abs(y_pct), abs(w_pct), abs(h_pct)) > 100:
+                    print(f"[PrecomputedTracker] WARNING: bbox out of range, using defaults")
+                    x_pct, y_pct, w_pct, h_pct = 45, 45, 10, 10
+                
+                x = x_pct * w / 100.0
+                y = y_pct * h / 100.0
+                bw = w_pct * w / 100.0
+                bh = h_pct * h / 100.0
                 boundary_px = np.array([
                     [x, y], [x + bw, y], [x + bw, y + bh], [x, y + bh]
                 ], dtype=np.float32)
@@ -96,16 +157,23 @@ class PrecomputedTracker:
                 'meta': ann
             }
         
-        print(f"[PrecomputedTracker] Initialized {len(annotations)} annotations")
+        print(f"[PrecomputedTracker] Initialized {len(annotations)} annotations at start_frame={start_frame}")
+        print(f"[PrecomputedTracker] frame_size={self.frame_size}, frame_skip={self.frame_skip}")
+        for ann_id, data in self.annotations.items():
+            print(f"[PrecomputedTracker] Annotation {ann_id}: initial_points[0]={data['initial_points'][0]}")
     
-    def _interpolate_point(self, point: np.ndarray, frame_idx: int) -> Tuple[np.ndarray, float]:
+    def _video_frame_to_cache_frame(self, video_frame_idx: int) -> int:
+        """Convert video frame index to cache frame index (accounting for frame_skip)."""
+        return video_frame_idx // self.frame_skip
+    
+    def _interpolate_point(self, point: np.ndarray, video_frame_idx: int) -> Tuple[np.ndarray, float]:
         """
-        Interpolate a single point's position at given frame using bilinear interpolation
-        from the 4 nearest grid points.
+        Interpolate a single point's position at given frame using nearest neighbor
+        from the closest grid point's motion.
         
         Args:
-            point: [x, y] in pixel coordinates at frame 0
-            frame_idx: Target frame index
+            point: [x, y] in pixel coordinates at start_frame
+            video_frame_idx: Target frame index in video (will be mapped to cache frame)
         
         Returns:
             (new_point, visibility)
@@ -115,74 +183,46 @@ class PrecomputedTracker:
         
         coords = self.data['coords']  # [num_frames, num_points, 2]
         visibility = self.data['visibility']  # [num_frames, num_points]
-        grid_size = self.data['grid_size']
-        frame_h, frame_w = self.frame_size
         
         num_frames = coords.shape[0]
-        frame_idx = min(frame_idx, num_frames - 1)
         
-        # Get grid coordinates at frame 0
-        coords_0 = coords[0]  # [N, 2] - all points at frame 0
+        # Map video frames to cache frames
+        cache_frame_idx = self._video_frame_to_cache_frame(video_frame_idx)
+        cache_frame_idx = min(max(0, cache_frame_idx), num_frames - 1)
         
-        # Find 4 nearest grid points using grid structure
-        gw, gh = grid_size[0], grid_size[1]
+        start_cache_frame = self._video_frame_to_cache_frame(self.start_frame)
+        start_cache_frame = min(max(0, start_cache_frame), num_frames - 1)
         
-        # Grid points are evenly spaced
-        cell_w = frame_w / gw
-        cell_h = frame_h / gh
+        # Get grid coordinates at start frame (where annotation was drawn)
+        coords_start = coords[start_cache_frame]  # [N, 2]
         
-        # Find grid cell containing the point
-        gx = point[0] / cell_w
-        gy = point[1] / cell_h
+        # Find nearest grid point by distance to where user drew
+        distances = np.sum((coords_start - point) ** 2, axis=1)
+        nearest_idx = np.argmin(distances)
         
-        # Get surrounding grid indices
-        gx0 = int(np.floor(gx))
-        gy0 = int(np.floor(gy))
-        gx1 = min(gx0 + 1, gw - 1)
-        gy1 = min(gy0 + 1, gh - 1)
-        gx0 = max(0, gx0)
-        gy0 = max(0, gy0)
+        # Get displacement from start_frame to target frame
+        raw_displacement = coords[cache_frame_idx, nearest_idx] - coords[start_cache_frame, nearest_idx]
         
-        # Bilinear weights
-        wx = gx - gx0
-        wy = gy - gy0
+        # Clamp displacement to reasonable bounds (max 50% of frame per direction)
+        # This prevents runaway tracking when LiteTracker loses track
+        h, w = self.frame_size
+        max_disp = max(h, w) * 0.5
+        displacement = np.clip(raw_displacement, -max_disp, max_disp)
         
-        # Grid point indices (row-major order)
-        def grid_idx(x, y):
-            return y * gw + x
-        
-        idx00 = grid_idx(gx0, gy0)
-        idx10 = grid_idx(gx1, gy0)
-        idx01 = grid_idx(gx0, gy1)
-        idx11 = grid_idx(gx1, gy1)
-        
-        # Get displacements from frame 0 to frame_idx
-        def get_displacement(idx):
-            return coords[frame_idx, idx] - coords[0, idx]
-        
-        d00 = get_displacement(idx00)
-        d10 = get_displacement(idx10)
-        d01 = get_displacement(idx01)
-        d11 = get_displacement(idx11)
-        
-        # Bilinear interpolation of displacement
-        d_top = d00 * (1 - wx) + d10 * wx
-        d_bottom = d01 * (1 - wx) + d11 * wx
-        displacement = d_top * (1 - wy) + d_bottom * wy
+
         
         # Apply displacement
         new_point = point + displacement
         
-        # Interpolate visibility
-        v00 = visibility[frame_idx, idx00]
-        v10 = visibility[frame_idx, idx10]
-        v01 = visibility[frame_idx, idx01]
-        v11 = visibility[frame_idx, idx11]
-        v_top = v00 * (1 - wx) + v10 * wx
-        v_bottom = v01 * (1 - wx) + v11 * wx
-        vis = v_top * (1 - wy) + v_bottom * wy
+        # Also clamp final point to stay within frame (with small margin)
+        margin = 0.05 * max(h, w)
+        new_point[0] = np.clip(new_point[0], -margin, w + margin)
+        new_point[1] = np.clip(new_point[1], -margin, h + margin)
         
-        return new_point.astype(np.float32), float(vis)
+        # Get visibility
+        vis = float(visibility[cache_frame_idx, nearest_idx])
+        
+        return new_point.astype(np.float32), vis
     
     def track_frame(self, frame: np.ndarray) -> Dict[str, PrecomputedTrackingResult]:
         """Track all annotations to current frame."""
@@ -221,7 +261,7 @@ class PrecomputedTracker:
             new_pts = []
             visibilities = []
             
-            for pt in initial_pts:
+            for i, pt in enumerate(initial_pts):
                 new_pt, vis = self._interpolate_point(pt, frame_idx)
                 new_pts.append(new_pt)
                 visibilities.append(vis)

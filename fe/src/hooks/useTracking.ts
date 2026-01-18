@@ -145,7 +145,7 @@ export function useTracking({ videoPath, initialLabels, onLabelsUpdate }: UseTra
 
         // Update tracked labels
         if (data.annotations) {
-          const newLabels = data.annotations.map((ann: any) => ({
+          const newLabels = data.annotations.map((ann: TrackedLabel) => ({
             ...ann,
             deformed: ann.deformed || false
           }));
@@ -255,12 +255,15 @@ export function useTracking({ videoPath, initialLabels, onLabelsUpdate }: UseTra
 
   // Cleanup on unmount
   useEffect(() => {
+    const reconnectTimeout = reconnectTimeoutRef.current;
+    const wsConnection = wsRef.current;
+
     return () => {
-      if (wsRef.current) {
-        wsRef.current.close();
+      if (wsConnection) {
+        wsConnection.close();
       }
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
+      if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
       }
       // Stop session
       if (sessionId) {

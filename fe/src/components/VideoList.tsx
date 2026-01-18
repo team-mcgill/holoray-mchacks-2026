@@ -16,14 +16,7 @@ interface VideoListProps {
 }
 
 const FileTreeItem = ({ node, level, onSelect, selectedPath, defaultOpen }: { node: FileNode, level: number, onSelect: (path: string) => void, selectedPath: string | null, defaultOpen?: boolean }) => {
-  const [isOpen, setIsOpen] = useState(defaultOpen || false);
-  
-  // Update open state if defaultOpen changes (e.g. when searching)
-  useEffect(() => {
-    if (defaultOpen !== undefined) {
-      setIsOpen(defaultOpen);
-    }
-  }, [defaultOpen]);
+  const [isOpen, setIsOpen] = useState(defaultOpen ?? false);
   
   const isSelected = node.path === selectedPath;
   const paddingLeft = `${level * 16 + 12}px`;
@@ -126,7 +119,7 @@ export const VideoList = ({ onSelectVideo, selectedVideo }: VideoListProps) => {
     <div className="h-full flex flex-col bg-transparent overflow-hidden">
       {/* Header */}
       <div className="pb-4">
-        <h2 className="font-serif font-semibold text-brand-secondary text-lg mb-4 pl-1">Assets</h2>
+        <h2 className="font-serif font-semibold text-brand-secondary text-lg mb-4 pl-1">Videos</h2>
         
         {/* Search / Filter (Visual only for now) */}
         <div className="relative group">
